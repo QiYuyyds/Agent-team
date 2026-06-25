@@ -69,3 +69,6 @@ next-env.d.ts
 # IDE
 .vscode/
 .idea/
+
+# Docs learning
+/docs/learning/
