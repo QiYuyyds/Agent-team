@@ -129,3 +129,96 @@ async def test_bookmark_invalid_body_returns_400(api_client, agents):
     resp = await api_client.post("/api/messages/m1/bookmark", json={})
     assert resp.status_code == 400
     assert resp.json()["error"] == "Invalid body"
+
+
+# ─── group chat without Orchestrator ─────────────────────────────────
+async def test_group_chat_no_orchestrator_system_message(db, agents):
+    """Sending a message in a group chat without an Orchestrator (and no @mention)
+    should produce a system message informing the user."""
+    # Create a group chat with two non-orchestrator agents.
+    # Seed a second non-orchestrator agent for this test.
+    from app.db.engine import get_db
+    from app.db.models import Agent
+    from app.utils.clock import now_ms
+
+    async with get_db() as session:
+        bob = Agent(
+            id="ag_bob",
+            name="Bob",
+            avatar="B",
+            description="another helper",
+            system_prompt="bob prompt",
+            adapter_name="mock",
+            is_builtin=False,
+            is_orchestrator=False,
+            supports_vision=False,
+            created_at=now_ms(),
+        )
+        bob.capabilities_list = []
+        bob.tool_names_list = []
+        session.add(bob)
+
+    conv = await cs.create_conversation(
+        mode="group", agent_ids=[agents["alice"], "ag_bob"]
+    )
+    result = await cs.send_message(conversation_id=conv.id, content="hello everyone")
+
+    # No runs should be started (no orchestrator, no mention)
+    assert result.run_ids == []
+    # A system message should be in the result
+    assert result.messages is not None
+    assert len(result.messages) == 1
+    sys_msg = result.messages[0]
+    assert sys_msg.role == "agent"
+    assert sys_msg.agent_id is None
+    assert any(
+        p.get("content", "").startswith("此群聊没有协调者")
+        for p in sys_msg.parts
+    )
+
+
+async def test_group_chat_with_orchestrator_no_system_message(db, agents):
+    """When a group chat has an Orchestrator, no system message should appear."""
+    conv = await cs.create_conversation(
+        mode="group", agent_ids=[agents["alice"], agents["orch"]]
+    )
+    result = await cs.send_message(conversation_id=conv.id, content="hello")
+    # Orchestrator should respond, so no system message
+    assert result.messages is None or len(result.messages) == 0
+    assert len(result.run_ids) > 0
+
+
+async def test_group_chat_no_orchestrator_with_mention(db, agents):
+    """When @mentioning an agent in a group without Orchestrator, that agent responds normally."""
+    from app.db.engine import get_db
+    from app.db.models import Agent
+    from app.utils.clock import now_ms
+
+    async with get_db() as session:
+        bob = Agent(
+            id="ag_bob2",
+            name="Bob2",
+            avatar="B",
+            description="another helper",
+            system_prompt="bob prompt",
+            adapter_name="mock",
+            is_builtin=False,
+            is_orchestrator=False,
+            supports_vision=False,
+            created_at=now_ms(),
+        )
+        bob.capabilities_list = []
+        bob.tool_names_list = []
+        session.add(bob)
+
+    conv = await cs.create_conversation(
+        mode="group", agent_ids=[agents["alice"], "ag_bob2"]
+    )
+    result = await cs.send_message(
+        conversation_id=conv.id,
+        content="@Alice help me",
+        mentioned_agent_ids=[agents["alice"]],
+    )
+    # Alice should respond, no system message
+    assert result.messages is None or len(result.messages) == 0
+    assert len(result.run_ids) > 0

@@ -167,13 +167,19 @@ async def _create_custom_agent(body: CreateAgentRequest) -> dict[str, Any]:
         api_key=api_key,
         api_base_url=api_base_url,
         is_builtin=False,
-        is_orchestrator=False,
+        is_orchestrator=body.is_orchestrator or False,
         supports_vision=body.supports_vision or False,
         created_at=now_ms(),
     )
     agent.capabilities_list = body.capabilities or []
     # SDK adapters use their own builtin tool set; force empty toolNames.
-    agent.tool_names_list = (body.tool_names or []) if adapter_name == "custom" else []
+    tool_names = (body.tool_names or []) if adapter_name == "custom" else []
+    # Orchestrator agents require plan_tasks + ask_user tools.
+    if body.is_orchestrator and adapter_name == "custom":
+        for required_tool in ("plan_tasks", "ask_user"):
+            if required_tool not in tool_names:
+                tool_names.append(required_tool)
+    agent.tool_names_list = tool_names
 
     async with get_db() as db:
         db.add(agent)
@@ -192,6 +198,7 @@ _PATCH_ALIASES: set[str] = {
     "modelId",
     "toolNames",
     "supportsVision",
+    "isOrchestrator",
     "apiKey",
     "apiBaseUrl",
 }
@@ -267,6 +274,7 @@ async def _update_custom_agent(
     has_model_id = "model_id" in provided
     has_model_provider = "model_provider" in provided
     has_tool_names = "tool_names" in provided
+    has_is_orchestrator = "is_orchestrator" in provided
 
     async with get_db() as db:
         agent = await db.get(Agent, agent_id)
@@ -322,6 +330,9 @@ async def _update_custom_agent(
             updated = True
         if "supports_vision" in provided and body.supports_vision is not None:
             agent.supports_vision = body.supports_vision
+            updated = True
+        if has_is_orchestrator and body.is_orchestrator is not None:
+            agent.is_orchestrator = body.is_orchestrator
             updated = True
         if has_api_key:
             agent.api_key = _trim_or_none(body.api_key)
@@ -398,6 +409,7 @@ _AVAILABLE_AGENT_TOOLS: tuple[str, ...] = (
     "read_artifact",
     "read_attachment",
     "ask_user",
+    "plan_tasks",
     "fs_list",
     "fs_read",
     "fs_write",
@@ -407,7 +419,7 @@ _AVAILABLE_AGENT_TOOLS: tuple[str, ...] = (
 _AGENT_TOOL_PRESETS: dict[str, dict[str, Any]] = {
     "all-purpose": {
         "label": "全栈通用",
-        "tools": list(_AVAILABLE_AGENT_TOOLS),
+        "tools": [t for t in _AVAILABLE_AGENT_TOOLS if t != "plan_tasks"],
     },
     "local-code": {
         "label": "本地代码",
@@ -460,6 +472,10 @@ _AGENT_TOOL_META: dict[str, dict[str, str]] = {
     "ask_user": {
         "label": "结构化提问",
         "desc": "让用户在明确选项中选择，用于范围、风格、平台等关键澄清",
+    },
+    "plan_tasks": {
+        "label": "任务规划",
+        "desc": "Orchestrator 专用：拆解用户目标为子任务并分派给其他 Agent",
     },
     "fs_list": {"label": "列出文件", "desc": "列出工作区内的目录和文件，用于安全探索项目结构"},
     "fs_read": {"label": "读取文件", "desc": "读取工作区内的文件（源码 / 配置等），仅限沙箱目录"},

@@ -250,3 +250,66 @@ async def test_draft_invalid_too_short(api_client, db):
     resp = await api_client.post("/api/agents/draft", json={"intent": "hi"})
     assert resp.status_code == 400
     assert resp.json()["error"] == "Invalid body"
+
+
+# ─── Orchestrator designation ───────────────────────────────────────
+async def test_create_orchestrator_agent(api_client, db):
+    resp = await api_client.post(
+        "/api/agents",
+        json={
+            "name": "Planner",
+            "description": "orchestrator agent",
+            "systemPrompt": "you plan tasks",
+            "adapterName": "custom",
+            "modelProvider": "deepseek",
+            "modelId": "deepseek-v4-flash",
+            "toolNames": ["bash", "fs_read"],
+            "isOrchestrator": True,
+        },
+    )
+    assert resp.status_code == 201
+    agent = resp.json()["agent"]
+    assert agent["isOrchestrator"] is True
+    # plan_tasks and ask_user should be auto-added
+    assert "plan_tasks" in agent["toolNames"]
+    assert "ask_user" in agent["toolNames"]
+    # Original tools preserved
+    assert "bash" in agent["toolNames"]
+    assert "fs_read" in agent["toolNames"]
+
+
+async def test_create_non_orchestrator_default(api_client, db):
+    resp = await api_client.post(
+        "/api/agents",
+        json={
+            "name": "Normal",
+            "description": "normal agent",
+            "systemPrompt": "p",
+            "adapterName": "custom",
+            "modelProvider": "deepseek",
+            "modelId": "deepseek-v4-flash",
+        },
+    )
+    assert resp.status_code == 201
+    agent = resp.json()["agent"]
+    assert agent["isOrchestrator"] is False
+    assert "plan_tasks" not in agent["toolNames"]
+
+
+async def test_patch_update_is_orchestrator(api_client, agents):
+    # Alice starts as non-orchestrator
+    resp = await api_client.patch(
+        "/api/agents/ag_alice",
+        json={"isOrchestrator": True},
+    )
+    assert resp.status_code == 200
+    agent = resp.json()["agent"]
+    assert agent["isOrchestrator"] is True
+
+    # Toggle back
+    resp2 = await api_client.patch(
+        "/api/agents/ag_alice",
+        json={"isOrchestrator": False},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["agent"]["isOrchestrator"] is False
