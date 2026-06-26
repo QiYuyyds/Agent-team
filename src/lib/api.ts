@@ -218,6 +218,21 @@ export async function setFsWriteApprovalMode(
   return conversation
 }
 
+// Task 5.3: Set conversation RAG mode
+export async function setRagMode(
+  conversationId: string,
+  enabled: boolean,
+): Promise<ConversationWithMeta> {
+  const { conversation } = await json<{ conversation: ConversationWithMeta }>(
+    fetch(`${API_BASE_URL}/api/conversations/${conversationId}/rag-mode`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ragEnabled: enabled }),
+    }),
+  )
+  return conversation
+}
+
 // ─── Pending writes (fs_write review mode) ─────
 export async function fetchPendingWrites(conversationId: string): Promise<PendingWrite[]> {
   const { pendingWrites } = await json<{ pendingWrites: PendingWrite[] }>(

@@ -43,6 +43,7 @@ class ConversationResponse(BaseModel):
     archived: bool
     pinned_at: int | None = Field(alias="pinnedAt")
     fs_write_approval_mode: Literal["auto", "review"] = Field(alias="fsWriteApprovalMode")
+    rag_enabled: bool = Field(alias="ragEnabled")
     created_at: int = Field(alias="createdAt")
     updated_at: int = Field(alias="updatedAt")
     workspace_mode: Literal["sandbox", "local"] = Field(alias="workspaceMode")
@@ -74,6 +75,14 @@ class SendMessageResponse(BaseModel):
 
     message_id: str = Field(alias="messageId")
     run_ids: list[str] = Field(alias="runIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class SetRagModeRequest(BaseModel):
+    """Request to set conversation RAG mode."""
+
+    rag_enabled: bool = Field(alias="ragEnabled")
 
     model_config = {"populate_by_name": True}
 

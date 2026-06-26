@@ -123,6 +123,7 @@ def _conversation_response(
         archived=conv.archived,
         pinned_at=conv.pinned_at,
         fs_write_approval_mode=conv.fs_write_approval_mode,
+        rag_enabled=conv.rag_enabled,
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         workspace_mode=ws_mode,
@@ -233,6 +234,7 @@ async def create_conversation(
             archived=False,
             pinned_at=None,
             fs_write_approval_mode="review",
+            rag_enabled=False,
             created_at=now,
             updated_at=now,
         )
@@ -261,6 +263,7 @@ async def create_conversation(
         archived=False,
         pinned_at=None,
         fs_write_approval_mode="review",
+        rag_enabled=False,
         created_at=now,
         updated_at=now,
         workspace_mode=workspace_mode,
@@ -343,6 +346,18 @@ async def set_conversation_approval_mode(
     async with get_db() as db:
         conv = await _require_conversation(db, conversation_id)
         conv.fs_write_approval_mode = mode
+        conv.updated_at = now_ms()
+        ws_mode, bound_path = await _ws_meta(db, conversation_id)
+        return _conversation_response(conv, ws_mode, bound_path)
+
+
+async def set_rag_mode(
+    conversation_id: str, enabled: bool
+) -> ConversationResponse:
+    """Task 3.3: Update conversation rag_enabled flag."""
+    async with get_db() as db:
+        conv = await _require_conversation(db, conversation_id)
+        conv.rag_enabled = enabled
         conv.updated_at = now_ms()
         ws_mode, bound_path = await _ws_meta(db, conversation_id)
         return _conversation_response(conv, ws_mode, bound_path)

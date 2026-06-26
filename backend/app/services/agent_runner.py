@@ -457,6 +457,36 @@ async def execute_simple_run(
         db.expunge(workspace)
 
     base_tool_names = args.override_tool_names or agent.tool_names_list
+
+    # Task 1.1: Implicitly inject memory_recall for custom agents
+    if agent.adapter_name == "custom":
+        if "memory_recall" not in base_tool_names:
+            base_tool_names = ["memory_recall"] + list(base_tool_names)
+            logger.info(
+                "[AgentRunner] Implicitly injected memory_recall tool for custom agent %s",
+                args.agent_id,
+            )
+
+    # Task 4.1: Dynamically inject RAG tools if conversation has rag_enabled=true
+    RAG_TOOLS = ["rag_search", "rag_ingest", "rag_list_documents", "rag_delete_document"]
+    async with get_db() as db:
+        from app.db.models import Conversation
+        conv = (
+            await db.execute(select(Conversation).where(Conversation.id == args.conversation_id))
+        ).scalar_one_or_none()
+        if conv and conv.rag_enabled:
+            # Only inject for custom agents (exclude SDK agents)
+            if agent.adapter_name == "custom":
+                existing = set(base_tool_names)
+                new_tools = [t for t in RAG_TOOLS if t not in existing]
+                if new_tools:
+                    base_tool_names = list(base_tool_names) + new_tools
+                    logger.info(
+                        "[AgentRunner] Injected RAG tools %s for conversation %s (rag_enabled=true)",
+                        new_tools,
+                        args.conversation_id,
+                    )
+
     tool_names = (
         _ensure_includes(base_tool_names, REPORT_TASK_RESULT_TOOL_NAME)
         if args.require_task_report
@@ -1398,6 +1428,43 @@ def _build_agent_hub_tool_guidance(
                 "字段名必须是 agentId、dependsOn、expectedOutputs、acceptanceCriteria、taskKind、targetPaths、expectedWorkspaceChanges、requiredCommands、requiredEvidence；不要写 snake_case。",
             ]
         )
+
+    if "memory_recall" in tools:
+        add(
+            [
+                "### memory_recall",
+                "用途：检索长期记忆与用户偏好，自动在对话中积累和回忆信息。",
+                "正确案例：当用户提到之前的偏好或历史上下文时，调用 memory_recall({ query: \"用户偏好\" }) 检索相关记忆。",
+                "无需手动调用：记忆系统会在每次对话后自动存储，需要时检索即可。",
+            ]
+        )
+
+    has_rag = any(t in tools for t in ("rag_search", "rag_ingest", "rag_list_documents", "rag_delete_document"))
+    if has_rag:
+        rag_lines = [
+            "### RAG 知识库工具",
+            "当前会话已启用 RAG 知识库检索，你可以使用以下工具操作知识库：",
+        ]
+        if "rag_search" in tools:
+            rag_lines.append(
+                '- rag_search({ query: "检索关键词" })：在知识库中检索相关文档片段，返回匹配的文本块和来源信息。'
+            )
+        if "rag_ingest" in tools:
+            rag_lines.append(
+                '- rag_ingest({ document: "文本内容", title: "文档标题" })：将新内容入库到知识库，供后续检索使用。'
+            )
+        if "rag_list_documents" in tools:
+            rag_lines.append(
+                '- rag_list_documents({})：列出知识库中已有的文档列表。'
+            )
+        if "rag_delete_document" in tools:
+            rag_lines.append(
+                '- rag_delete_document({ document_id: "doc_xxx" })：从知识库中删除指定文档。'
+            )
+        rag_lines.append(
+            "使用建议：用户提问涉及已有知识库内容时，优先调用 rag_search 检索；用户要求保存信息时，用 rag_ingest 入库。"
+        )
+        add(rag_lines)
 
     return "\n\n".join(sections)
 
