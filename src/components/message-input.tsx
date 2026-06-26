@@ -3,6 +3,7 @@
 import {
   Archive,
   AlertTriangle,
+  BookOpen,
   Bot,
   CircleHelp,
   Download,
@@ -44,6 +45,7 @@ import {
   reviseDispatchPlan,
   sendMessage as sendMessageAPI,
   setFsWriteApprovalMode,
+  setRagMode,
   uploadAttachment as uploadAttachmentAPI,
 } from '@/lib/api'
 import { getToolDisplayName } from '@/lib/tool-display'
@@ -771,6 +773,22 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
     }
   }
 
+  // Task 6.2: RAG toggle logic
+  const ragEnabled = conversation?.ragEnabled ?? false
+  const toggleRagMode = async () => {
+    if (modeBusy || !conversation) return
+    const nextEnabled = !ragEnabled
+    setModeBusy(true)
+    try {
+      const updated = await setRagMode(conversationId, nextEnabled)
+      upsertConversation(updated)
+    } catch (err) {
+      console.error('[MessageInput] toggle RAG mode failed', err)
+    } finally {
+      setModeBusy(false)
+    }
+  }
+
   return (
     <div className="relative shrink-0 border-t bg-background p-3">
       {/* 引用预览 */}
@@ -1008,6 +1026,26 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
             ) : (
               <Zap className="size-4" />
             )}
+          </Button>
+          {/* Task 6.1: RAG 知识库检索开关 */}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => void toggleRagMode()}
+            disabled={modeBusy}
+            title={
+              ragEnabled
+                ? 'RAG 已启用 · Agent 可检索与管理知识库'
+                : '启用 RAG 知识库检索'
+            }
+            className={cn(
+              ragEnabled
+                ? 'text-blue-600 hover:text-blue-700 dark:text-blue-400'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <BookOpen className="size-4" />
           </Button>
         </div>
         {composerLocked ? (

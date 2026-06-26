@@ -166,6 +166,10 @@ class Conversation(Base):
         String, name="fs_write_approval_mode", nullable=False, default="review"
     )
 
+    rag_enabled: Mapped[bool] = mapped_column(
+        Boolean, name="rag_enabled", nullable=False, default=False
+    )
+
     created_at: Mapped[int] = mapped_column(BigInteger, name="created_at", nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, name="updated_at", nullable=False)
 
