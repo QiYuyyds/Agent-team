@@ -106,6 +106,7 @@ class CreateAgentRequest(BaseModel):
     api_base_url: str | None = Field(default=None, alias="apiBaseUrl")
 
     tool_names: list[str] | None = Field(default=None, alias="toolNames")
+    skill_names: list[str] | None = Field(default=None, alias="skillNames")
     supports_vision: bool | None = Field(default=None, alias="supportsVision")
 
     model_config = {"populate_by_name": True}
@@ -128,6 +129,7 @@ class UpdateAgentRequest(BaseModel):
     api_base_url: str | None = Field(default=None, alias="apiBaseUrl")
 
     tool_names: list[str] | None = Field(default=None, alias="toolNames")
+    skill_names: list[str] | None = Field(default=None, alias="skillNames")
     supports_vision: bool | None = Field(default=None, alias="supportsVision")
 
     model_config = {"populate_by_name": True}

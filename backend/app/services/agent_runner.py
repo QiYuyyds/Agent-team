@@ -472,6 +472,17 @@ async def execute_simple_run(
                 args.agent_id,
             )
 
+    # Inject load_skill when a custom agent has equipped (and still-present) skills.
+    if agent.adapter_name == "custom" and agent.skill_names_list:
+        from app.services.skill_service import list_skills
+        available = {m.slug for m in list_skills()}
+        if any(s in available for s in agent.skill_names_list) and "load_skill" not in base_tool_names:
+            base_tool_names = list(base_tool_names) + ["load_skill"]
+            logger.info(
+                "[AgentRunner] Injected load_skill for custom agent %s (equipped skills)",
+                args.agent_id,
+            )
+
     # Task 4.1: Dynamically inject RAG tools if conversation has rag_enabled=true
     RAG_TOOLS = ["rag_search", "rag_ingest", "rag_list_documents", "rag_delete_document"]
     async with get_db() as db:
@@ -1100,6 +1111,31 @@ GROUP_CHAT_SYSTEM_NOTE = "\n".join(
 )
 
 
+def _build_skill_metadata_block(agent: Agent) -> str:
+    """Render equipped skills as name+description only (progressive disclosure).
+
+    The SKILL.md body is NEVER inlined here — the model calls load_skill(slug) to
+    read it on demand. Only custom agents consume skills; missing slugs are skipped.
+    """
+    if agent.adapter_name != "custom" or not agent.skill_names_list:
+        return ""
+    from app.services.skill_service import list_skills
+
+    by_slug = {m.slug: m for m in list_skills()}
+    equipped = [by_slug[s] for s in agent.skill_names_list if s in by_slug]
+    if not equipped:
+        return ""
+
+    lines = [
+        "【可用技能】你装备了以下技能。当任务匹配某技能描述时，先调用 "
+        "load_skill(name=<slug>) 读取其完整说明再执行；技能附带的脚本/文件用 "
+        "fs_read 读取、用 bash 运行。",
+    ]
+    for m in equipped:
+        lines.append(f"- {m.slug}: {m.description}")
+    return "\n".join(lines)
+
+
 async def build_adapter_input(
     args: RunArgs,
     agent: Agent,
@@ -1118,6 +1154,10 @@ async def build_adapter_input(
     tool_guidance = _build_agent_hub_tool_guidance(agent, tool_names, workspace)
     if tool_guidance:
         system_prompt_with_workspace += "\n\n" + tool_guidance
+
+    skill_block = _build_skill_metadata_block(agent)
+    if skill_block:
+        system_prompt_with_workspace += "\n\n" + skill_block
 
     # key precedence: agent.api_key > app_settings.* > adapter env fallback.
     # only inject global settings when the per-agent field is empty.

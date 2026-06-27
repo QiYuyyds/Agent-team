@@ -66,6 +66,8 @@ export interface CreateAgentBody {
   /** custom: required；SDK adapter: 可选，默认 SDK 默认模型 */
   modelId?: string
   toolNames: string[]
+  /** custom: 启用的 skill slug 列表；SDK adapter: 必须为空 */
+  skillNames: string[]
   supportsVision?: boolean
   apiKey?: string
   /** 自定义 API base URL。Claude/Codex 对 endpoint 协议兼容性要求不同；空走默认 */
@@ -890,4 +892,42 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
     throw new Error(`HTTP ${res.status}: ${body || res.statusText}`)
   }
   return res.json() as Promise<UploadResult>
+}
+
+// ─── Skills (技能；文件系统支撑，custom adapter 用) ──────────
+export interface SkillSummary {
+  slug: string
+  name: string
+  description: string
+}
+
+export async function listSkills(): Promise<SkillSummary[]> {
+  const { skills } = await json<{ skills: SkillSummary[] }>(fetch(API_BASE_URL + '/api/skills'))
+  return skills
+}
+
+/**
+ * 上传一个 skill。folder 上传时为每个文件传 webkitRelativePath，
+ * single-file 时传文件名。files 与 paths 一一对应。
+ */
+export async function uploadSkill(files: File[], paths: string[]): Promise<SkillSummary> {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  for (const path of paths) form.append('paths', path)
+  const res = await fetch(`${API_BASE_URL}/api/skills/upload`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body || res.statusText}`)
+  }
+  const { skill } = (await res.json()) as { skill: SkillSummary }
+  return skill
+}
+
+export async function deleteSkill(slug: string): Promise<void> {
+  await json<{ ok: true }>(
+    fetch(`${API_BASE_URL}/api/skills/${slug}`, { method: 'DELETE' }),
+  )
 }

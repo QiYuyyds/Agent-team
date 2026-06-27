@@ -57,6 +57,27 @@ async def init_db() -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_columns(conn)
+
+
+async def _migrate_columns(conn) -> None:  # type: ignore[no-untyped-def]
+    """Idempotent column additions for tables that predate a new field.
+
+    ``create_all`` only creates missing tables; it never alters existing ones.
+    Postgres supports ``ADD COLUMN IF NOT EXISTS``; SQLite (tests/dev) does not,
+    so failures there are swallowed (the column is created fresh via create_all).
+    """
+    import contextlib
+
+    from sqlalchemy import text
+
+    statements = [
+        "ALTER TABLE agents ADD COLUMN IF NOT EXISTS skill_names JSONB NOT NULL DEFAULT '[]'::jsonb",
+    ]
+    for stmt in statements:
+        # dialects without IF NOT EXISTS (sqlite) / pre-existing column → no-op
+        with contextlib.suppress(Exception):
+            await conn.execute(text(stmt))
 
 
 async def close_db() -> None:
