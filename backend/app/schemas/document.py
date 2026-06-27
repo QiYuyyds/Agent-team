@@ -129,6 +129,7 @@ class WriteDocumentResponse(BaseModel):
     document: DocumentResponse
     version: VersionResponse
     created: bool
+    already_imported: bool = Field(default=False, alias="alreadyImported")
     ingest: dict[str, Any] | None = None
 
     model_config = {"populate_by_name": True}

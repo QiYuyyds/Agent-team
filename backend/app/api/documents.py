@@ -121,6 +121,7 @@ async def write_document(req: WriteDocumentRequest) -> WriteDocumentResponse:
         document=_doc_response(result["document"]),
         version=_ver_response(result["version"]),
         created=result["created"],
+        already_imported=result.get("already_imported", False),
         ingest=result.get("ingest"),
     )
 

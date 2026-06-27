@@ -96,6 +96,20 @@ class DocumentService:
         now = _now()
         meta = metadata or {}
 
+        # Artifact import is idempotent: if this artifact was already imported,
+        # return the existing document instead of creating a duplicate.
+        artifact_id = meta.get("artifactId") if source == "artifact_import" else None
+        if artifact_id:
+            existing = await self._find_imported_artifact(artifact_id)
+            if existing is not None:
+                return {
+                    "document": existing["document"],
+                    "version": existing["version"],
+                    "created": False,
+                    "already_imported": True,
+                    "ingest": None,
+                }
+
         async with self._get_db() as session:
             if document_id:
                 # Update existing document — create new version
@@ -177,8 +191,37 @@ class DocumentService:
             "document": doc_dict,
             "version": ver_dict,
             "created": created,
+            "already_imported": False,
             "ingest": ingest_info,
         }
+
+    async def _find_imported_artifact(self, artifact_id: str) -> dict | None:
+        """Return the active document previously imported from this artifactId, or None."""
+        async with self._get_db() as session:
+            result = await session.execute(
+                select(Document)
+                .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+                .where(
+                    Document.status != "deleted",
+                    DocumentVersion.meta["artifactId"].astext == artifact_id,
+                )
+                .order_by(desc(Document.updated_at))
+                .limit(1)
+            )
+            doc = result.scalars().first()
+            if doc is None:
+                return None
+
+            ver_result = await session.execute(
+                select(DocumentVersion).where(
+                    DocumentVersion.id == doc.latest_version_id
+                )
+            )
+            ver = ver_result.scalar_one_or_none()
+            return {
+                "document": _doc_to_dict(doc),
+                "version": _ver_to_dict(ver) if ver else None,
+            }
 
     # ─── Read ──────────────────────────────────────────────────────────────
 

@@ -538,6 +538,7 @@ export interface WriteDocumentResponse {
   document: DocumentRow
   version: VersionRow
   created: boolean
+  alreadyImported?: boolean
   ingest?: {
     chunk_count: number
     doc_hash: string
