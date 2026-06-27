@@ -11,7 +11,7 @@ Routes:
   POST   /documents/upload           — upload file → parse → create → ingest
 """
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Form, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.schemas import (
@@ -203,8 +203,19 @@ async def ingest_document(
 
 
 @router.post("/documents/upload")
-async def upload_document(file: UploadFile | None = None) -> UploadDocumentResponse:
-    """Upload file → parse → create document → ingest to RAG (one-stop)."""
+async def upload_document(
+    file: UploadFile | None = None,
+    document_id: str = Form(default=""),
+    title: str | None = Form(default=None),
+    doc_type: str | None = Form(default=None),
+) -> UploadDocumentResponse:
+    """Upload file → parse → create document → ingest to RAG (one-stop).
+
+    Optional form fields:
+    - document_id: if provided, creates a new version for an existing document
+    - title: overrides the default title derived from filename
+    - doc_type: overrides the default document type
+    """
     if file is None:
         return JSONResponse({"error": "Missing file"}, status_code=400)  # type: ignore
 
@@ -215,6 +226,9 @@ async def upload_document(file: UploadFile | None = None) -> UploadDocumentRespo
             filename=file.filename or "file",
             content_type=file.content_type or "",
             data=data,
+            document_id=document_id,
+            title=title,
+            doc_type=doc_type or "upload",
         )
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)  # type: ignore

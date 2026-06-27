@@ -150,7 +150,11 @@ def _extract_pdf_with_pdftotext(data: bytes) -> Tuple[str, int, str]:
                 [exe, "-layout", "-enc", "UTF-8", path, "-"],
                 timeout=30,
             )
-            return out.decode("utf-8", errors="ignore"), 0, "pdftotext"
+            text = out.decode("utf-8", errors="ignore")
+            # pdftotext separates pages with \x0c (form feed);
+            # page count = number of form-feed separators + 1
+            pages = text.count("\x0c") + 1 if text.strip() else 0
+            return text, pages, "pdftotext"
         finally:
             _safe_unlink(path)
     except Exception as e:

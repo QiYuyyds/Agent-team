@@ -880,9 +880,15 @@ export async function ingestDocument(documentId: string, versionId: string): Pro
   )
 }
 
-export async function uploadDocument(file: File): Promise<UploadResult> {
+export async function uploadDocument(
+  file: File,
+  opts?: { documentId?: string; title?: string; docType?: string },
+): Promise<UploadResult> {
   const form = new FormData()
   form.append('file', file)
+  if (opts?.documentId) form.append('document_id', opts.documentId)
+  if (opts?.title) form.append('title', opts.title)
+  if (opts?.docType) form.append('doc_type', opts.docType)
   const res = await fetch(`${API_BASE_URL}/api/documents/upload`, {
     method: 'POST',
     body: form,

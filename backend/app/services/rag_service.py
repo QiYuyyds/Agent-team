@@ -169,3 +169,58 @@ class RAGService:
                 logger.warning("KG delete by doc_hash failed: %s", e)
 
         return deleted_count
+
+    async def delete_by_document_id(self, document_id: str) -> int:
+        """Delete all RAG chunks for a document (all versions) from PG + ES + Milvus + KG.
+
+        Queries rag_chunks by document_id to collect pg_ids + doc_hashes,
+        then batch-deletes across all four stores.
+        Returns the number of PG rows deleted.
+        """
+        from app.db.engine import get_db
+        from app.db.models import RagChunk
+        from sqlalchemy import select, delete
+
+        # 1. Collect pg_ids + doc_hashes before deleting
+        async with get_db() as session:
+            rows_result = await session.execute(
+                select(RagChunk.id, RagChunk.doc_hash).where(
+                    RagChunk.document_id == document_id
+                )
+            )
+            rows = rows_result.all()
+            if not rows:
+                return 0
+
+            pg_ids = [row[0] for row in rows]
+            doc_hashes = list({row[1] for row in rows})  # dedupe
+
+            # 2. Delete from PG
+            result = await session.execute(
+                delete(RagChunk).where(RagChunk.document_id == document_id)
+            )
+            deleted_count = result.rowcount or 0
+
+        # 3. Delete from ES (best-effort)
+        if self._es_delete_fn:
+            try:
+                await self._es_delete_fn(pg_ids)
+            except Exception as e:
+                logger.warning("ES delete by document_id failed: %s", e)
+
+        # 4. Delete from Milvus (best-effort)
+        if self._milvus_delete_fn:
+            try:
+                self._milvus_delete_fn(pg_ids)
+            except Exception as e:
+                logger.warning("Milvus delete by document_id failed: %s", e)
+
+        # 5. Delete from KG (best-effort) — by each unique doc_hash
+        if self._kg_delete_fn:
+            for dh in doc_hashes:
+                try:
+                    await self._kg_delete_fn(dh)
+                except Exception as e:
+                    logger.warning("KG delete by doc_hash %s failed: %s", dh, e)
+
+        return deleted_count
