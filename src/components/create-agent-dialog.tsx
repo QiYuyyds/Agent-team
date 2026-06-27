@@ -91,6 +91,7 @@ export function CreateAgentDialog({
   const [apiKey, setApiKey] = useState('')
   const [apiBaseUrl, setApiBaseUrl] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
+  const [isOrchestrator, setIsOrchestrator] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<AgentTab>('basic')
@@ -124,6 +125,7 @@ export function CreateAgentDialog({
       setToolNames(new Set(agent.toolNames))
       setSkillNames(new Set(agent.skillNames))
       setSupportsVision(agent.supportsVision)
+      setIsOrchestrator(agent.isOrchestrator)
       setApiKey(agent.apiKey ?? '')
       setApiBaseUrl(agent.apiBaseUrl ?? '')
     } else {
@@ -137,6 +139,7 @@ export function CreateAgentDialog({
       setToolNames(new Set(DEFAULT_CUSTOM_AGENT_TOOLS))
       setSkillNames(new Set())
       setSupportsVision(true)
+      setIsOrchestrator(false)
       setApiKey('')
       setApiBaseUrl('')
       setCreateStep('choose')
@@ -154,6 +157,20 @@ export function CreateAgentDialog({
       .then(setAvailableSkills)
       .catch((err) => console.error('[CreateAgentDialog] load skills failed', err))
   }, [open])
+
+  const handleOrchestratorChange = (checked: boolean) => {
+    setIsOrchestrator(checked)
+    if (checked) {
+      // Auto-merge plan_tasks and ask_user into toolNames
+      setToolNames((prev) => {
+        const next = new Set(prev)
+        next.add('plan_tasks')
+        next.add('ask_user')
+        return next
+      })
+    }
+    // When unchecked, do NOT auto-remove tools (user may need them for other purposes)
+  }
 
   const handleAdapterKindChange = (kind: AdapterKind) => {
     setAdapterKind(kind)
@@ -219,6 +236,7 @@ export function CreateAgentDialog({
     setToolNames(new Set(draft.toolNames))
     setSkillNames(new Set())
     setSupportsVision(draft.supportsVision)
+    setIsOrchestrator(false)
     setApiKey('')
     setApiBaseUrl('')
     setShowApiKey(false)
@@ -249,6 +267,7 @@ export function CreateAgentDialog({
         toolNames: isSdkAgent ? [] : draft.toolNames,
         skillNames: [],
         supportsVision: draft.supportsVision,
+        isOrchestrator: isOrchestrator || undefined,
       }
       const created = await createAgent(body)
       upsertAgent(created)
@@ -310,6 +329,7 @@ export function CreateAgentDialog({
           toolNames: isSdkAgent ? [] : Array.from(toolNames),
           skillNames: isSdkAgent ? [] : Array.from(skillNames),
           supportsVision,
+          isOrchestrator,
           apiKey: trimmedApiKey || null,
           apiBaseUrl: trimmedApiBaseUrl || null,
         }
@@ -328,6 +348,7 @@ export function CreateAgentDialog({
           toolNames: isSdkAgent ? [] : Array.from(toolNames),
           skillNames: isSdkAgent ? [] : Array.from(skillNames),
           supportsVision,
+          isOrchestrator: isOrchestrator || undefined,
           apiKey: trimmedApiKey || undefined,
           apiBaseUrl: trimmedApiBaseUrl || undefined,
         }
@@ -434,6 +455,29 @@ export function CreateAgentDialog({
                     />
                     <div className="mt-1 text-[10px] text-muted-foreground">用逗号或空格分隔</div>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-[80px_1fr] items-start gap-3">
+                  <Label>角色</Label>
+                  <label
+                    className={cn(
+                      'flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 transition hover:border-foreground/30',
+                      isOrchestrator && 'border-primary bg-primary/5',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isOrchestrator}
+                      onChange={(e) => handleOrchestratorChange(e.target.checked)}
+                      className="mt-0.5 accent-primary"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium">设为协调者 (Orchestrator)</div>
+                      <div className="mt-0.5 text-[10px] text-muted-foreground">
+                        协调者负责群聊中的任务拆解与分派，会自动启用 <code className="font-mono">plan_tasks</code> 和 <code className="font-mono">ask_user</code> 工具。
+                      </div>
+                    </div>
+                  </label>
                 </div>
               </TabsContent>
 

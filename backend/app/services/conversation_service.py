@@ -651,6 +651,56 @@ async def send_message(
         conv_mode, conv_agent_ids, mentioned_agent_ids, agent_infos
     )
 
+    # Group chat with no Orchestrator and no @mention: emit a system message.
+    if not responders and conv_mode == "group" and not mentioned_agent_ids:
+        sys_msg_id = new_message_id()
+        sys_parts = [
+            {
+                "type": "text",
+                "content": "此群聊没有协调者。请使用 @Agent名 指定回复对象。",
+            }
+        ]
+        sys_now = now_ms()
+
+        async with get_db() as db:
+            sys_msg = Message(
+                id=sys_msg_id,
+                conversation_id=conversation_id,
+                role="agent",
+                agent_id=None,
+                status="complete",
+                parent_message_id=message_id,
+                run_id=None,
+                created_at=sys_now,
+            )
+            sys_msg.parts_list = sys_parts
+            sys_msg.mentioned_agent_ids_list = []
+            db.add(sys_msg)
+
+        sys_record = MessageRecord(
+            id=sys_msg_id,
+            conversation_id=conversation_id,
+            role="agent",
+            agent_id=None,
+            parts=sys_parts,
+            status="complete",
+            parent_message_id=message_id,
+            mentioned_agent_ids=[],
+            run_id=None,
+            usage=None,
+            created_at=sys_now,
+        )
+        event_bus.publish(
+            MessageAddedEvent(
+                conversation_id=conversation_id,
+                timestamp=sys_now,
+                message=sys_record,
+            )
+        )
+        return SendMessageResult(
+            message_id=message_id, run_ids=[], messages=[sys_record]
+        )
+
     runner = get_agent_runner()
     run_ids: list[str] = []
     for agent_id in responders:

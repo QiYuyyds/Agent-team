@@ -72,6 +72,8 @@ export interface CreateAgentBody {
   apiKey?: string
   /** 自定义 API base URL。Claude/Codex 对 endpoint 协议兼容性要求不同；空走默认 */
   apiBaseUrl?: string
+  /** 设为协调者（Orchestrator） */
+  isOrchestrator?: boolean
 }
 
 export async function createAgent(body: CreateAgentBody): Promise<AgentRow> {
@@ -105,6 +107,8 @@ export type UpdateAgentBody = Partial<
   apiKey?: string | null
   // 同上
   apiBaseUrl?: string | null
+  /** 设为协调者（Orchestrator） */
+  isOrchestrator?: boolean
 }
 
 export async function updateAgent(agentId: string, patch: UpdateAgentBody): Promise<AgentRow> {

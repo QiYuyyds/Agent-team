@@ -52,6 +52,11 @@ export function NewConversationDialog({
 
   const mode: 'single' | 'group' = selected.size > 1 ? 'group' : 'single'
 
+  const selectedOrchestrator =
+    mode === 'group'
+      ? agents.find((a) => selected.has(a.id) && a.isOrchestrator)
+      : undefined
+
   const toggle = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -147,6 +152,27 @@ export function NewConversationDialog({
             })
           )}
         </div>
+
+        {/* Orchestrator 状态提示 */}
+        {mode === 'group' && selected.size > 0 && (
+          <div
+            className={cn(
+              'rounded-md border px-3 py-2 text-xs',
+              selectedOrchestrator
+                ? 'border-green-300 bg-green-50/50 text-green-700 dark:border-green-900/50 dark:bg-green-950/20 dark:text-green-300'
+                : 'border-amber-300 bg-amber-50/50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300',
+            )}
+          >
+            {selectedOrchestrator ? (
+              <span>协调者: {selectedOrchestrator.name} ✓</span>
+            ) : (
+              <span className="flex items-start gap-1.5">
+                <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+                <span>此群聊无协调者，消息须 @ 具体 Agent 才能被响应</span>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* 工作目录 */}
         <div className="space-y-2 border-t pt-3">

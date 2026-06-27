@@ -24,6 +24,7 @@ export const AVAILABLE_AGENT_TOOLS = [
   'read_artifact',
   'read_attachment',
   'ask_user',
+  'plan_tasks',
   'fs_list',
   'fs_read',
   'fs_write',
@@ -46,20 +47,10 @@ export const AGENT_TOOL_PRESETS: readonly AgentToolPreset[] = [
     id: 'all-purpose',
     label: '全栈通用',
     desc: '本地代码 + artifact 交付',
-    // web_search intentionally excluded — keep it opt-in (avoids spending Tavily
-    // credits on every all-purpose agent). Tick it explicitly when search is needed.
-    tools: [
-      'write_artifact',
-      'deploy_artifact',
-      'deploy_workspace',
-      'read_artifact',
-      'read_attachment',
-      'ask_user',
-      'fs_list',
-      'fs_read',
-      'fs_write',
-      'bash',
-    ],
+    // plan_tasks (Orchestrator-only) and web_search (opt-in, consumes Tavily
+    // credits) are both excluded from the all-purpose preset — tick them
+    // explicitly when needed.
+    tools: AVAILABLE_AGENT_TOOLS.filter((t) => t !== 'plan_tasks' && t !== 'web_search'),
   },
   {
     id: 'local-code',
@@ -90,6 +81,7 @@ export const AGENT_TOOL_META: Record<AgentToolName, { label: string; desc: strin
   read_artifact: { label: '读取产物', desc: '查看会话中已有产物的完整内容，便于在其基础上继续改' },
   read_attachment: { label: '读取附件', desc: '读取用户上传的文本 / 文件附件内容' },
   ask_user: { label: '结构化提问', desc: '让用户在明确选项中选择，用于范围、风格、平台等关键澄清' },
+  plan_tasks: { label: '任务规划', desc: 'Orchestrator 专用：拆解用户目标为子任务并分派给其他 Agent' },
   fs_list: { label: '列出文件', desc: '列出工作区内的目录和文件，用于安全探索项目结构' },
   fs_read: { label: '读取文件', desc: '读取工作区内的文件（源码 / 配置等），仅限沙箱目录' },
   fs_write: { label: '写入文件', desc: '在工作区内新建 / 修改文件；review 模式下需用户批准' },

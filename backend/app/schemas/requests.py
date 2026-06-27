@@ -108,6 +108,7 @@ class CreateAgentRequest(BaseModel):
     tool_names: list[str] | None = Field(default=None, alias="toolNames")
     skill_names: list[str] | None = Field(default=None, alias="skillNames")
     supports_vision: bool | None = Field(default=None, alias="supportsVision")
+    is_orchestrator: bool | None = Field(default=False, alias="isOrchestrator")
 
     model_config = {"populate_by_name": True}
 
@@ -131,6 +132,7 @@ class UpdateAgentRequest(BaseModel):
     tool_names: list[str] | None = Field(default=None, alias="toolNames")
     skill_names: list[str] | None = Field(default=None, alias="skillNames")
     supports_vision: bool | None = Field(default=None, alias="supportsVision")
+    is_orchestrator: bool | None = Field(default=None, alias="isOrchestrator")
 
     model_config = {"populate_by_name": True}
 
