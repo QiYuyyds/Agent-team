@@ -69,24 +69,103 @@ class RAGEngine:
 
         doc_hash = hashlib.sha256(doc.encode("utf-8")).hexdigest()[:16]
         contents = [chunk.content for chunk in chunks]
+
+        # Compute chunk-level content_hash for embedding cache reuse
+        content_hashes: List[str] = [
+            hashlib.sha256(c.encode("utf-8")).hexdigest()[:16] for c in contents
+        ]
+
+        # Build embedding cache: batch query PG for existing content_hash + embedding
+        cache_map: Dict[str, List[float]] = {}
+        if content_hashes:
+            cache_map = await self._lookup_embedding_cache(content_hashes)
+
+        # Determine expected embedding dimension from settings
+        expected_dim = self.settings.rag_milvus_dim
+
         embeddings: List[List[float]] = []
+        cache_hit: List[bool] = []  # True = skip embed_fn and KG extraction
         for i, chunk in enumerate(chunks):
-            embedding: List[float] = []
-            if self._embed_fn:
-                try:
-                    embedding = self._embed_fn(chunk.content)
-                except Exception as e:
-                    logger.warning("Chunk vectorization failed (idx=%d): %s", i, e)
-            embeddings.append(embedding)
+            ch = content_hashes[i]
+            cached_emb = cache_map.get(ch)
+            if cached_emb is not None and (
+                expected_dim == 0 or len(cached_emb) == expected_dim
+            ):
+                # Cache hit: reuse existing embedding, skip embed_fn + KG
+                embeddings.append(cached_emb)
+                cache_hit.append(True)
+            else:
+                # Cache miss (or dim mismatch): generate new embedding
+                embedding: List[float] = []
+                if self._embed_fn:
+                    try:
+                        embedding = self._embed_fn(chunk.content)
+                    except Exception as e:
+                        logger.warning(
+                            "Chunk vectorization failed (idx=%d): %s", i, e
+                        )
+                embeddings.append(embedding)
+                cache_hit.append(False)
 
         if self._hybrid:
-            await self._hybrid.index_chunks(doc_hash, contents, child_parents, embeddings)
+            await self._hybrid.index_chunks(
+                doc_hash,
+                contents,
+                child_parents,
+                embeddings,
+                content_hashes=content_hashes,
+                cache_hit=cache_hit,
+            )
         else:
             logger.warning("No hybrid store configured, chunks not indexed")
 
         self.loaded = True
-        logger.info("Ingested %d chunks from %d parents (doc_hash=%s)", len(chunks), len(parents), doc_hash)
+        logger.info(
+            "Ingested %d chunks from %d parents (doc_hash=%s, cache_hits=%d)",
+            len(chunks),
+            len(parents),
+            doc_hash,
+            sum(cache_hit),
+        )
         return len(chunks)
+
+    async def _lookup_embedding_cache(
+        self, content_hashes: List[str]
+    ) -> Dict[str, List[float]]:
+        """Batch query PG for existing embeddings by content_hash.
+
+        Returns a mapping content_hash -> embedding for all hits.
+        """
+        if not content_hashes:
+            return {}
+        try:
+            from app.db.engine import get_db
+            from app.db.models import RagChunk
+            from sqlalchemy import select
+
+            # Deduplicate hashes for the IN query
+            unique_hashes = list(set(content_hashes))
+            async with get_db() as session:
+                stmt = (
+                    select(RagChunk.content_hash, RagChunk.embedding)
+                    .where(
+                        RagChunk.content_hash.in_(unique_hashes),
+                        RagChunk.embedding.isnot(None),
+                    )
+                )
+                result = await session.execute(stmt)
+                rows = result.all()
+
+            cache: Dict[str, List[float]] = {}
+            for row in rows:
+                ch = row[0]
+                emb = row[1]
+                if ch and emb and ch not in cache:
+                    cache[ch] = list(emb)
+            return cache
+        except Exception as e:
+            logger.warning("Embedding cache lookup failed: %s", e)
+            return {}
 
     # ─── Search ───────────────────────────────────────────────────────────
 

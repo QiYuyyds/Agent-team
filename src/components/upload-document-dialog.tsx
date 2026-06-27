@@ -1,7 +1,7 @@
 'use client'
 
 import { AlertCircle, CheckCircle2, FileUp, Loader2, Upload } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   Dialog,
@@ -30,11 +30,21 @@ export function UploadDocumentDialog({
   open,
   onOpenChange,
   onUploaded,
+  documentId,
+  defaultTitle,
+  defaultDocType,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   onUploaded?: () => void
+  /** When provided, the dialog operates in "new version" mode for this document */
+  documentId?: string
+  /** Pre-fill title (used in new-version mode) */
+  defaultTitle?: string
+  /** Pre-fill doc type (used in new-version mode) */
+  defaultDocType?: string
 }) {
+  const isVersionMode = !!documentId
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
   const [docType, setDocType] = useState('note')
@@ -45,10 +55,20 @@ export function UploadDocumentDialog({
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Pre-fill title and doc type when entering new-version mode
+  useEffect(() => {
+    if (open && isVersionMode) {
+      setTitle(defaultTitle || '')
+      setDocType(defaultDocType || 'note')
+    }
+  }, [open, isVersionMode, defaultTitle, defaultDocType])
+
   const reset = () => {
     setFile(null)
-    setTitle('')
-    setDocType('note')
+    if (!isVersionMode) {
+      setTitle('')
+      setDocType('note')
+    }
     setAutoIngest(true)
     setResult(null)
     setError(null)
@@ -59,12 +79,12 @@ export function UploadDocumentDialog({
     setFile(f)
     setResult(null)
     setError(null)
-    // Auto-fill title from filename if empty
-    if (!title) {
+    // Auto-fill title from filename if empty and not in version mode
+    if (!title && !isVersionMode) {
       const baseName = f.name.replace(/\.[^.]+$/, '')
       setTitle(baseName)
     }
-  }, [title])
+  }, [title, isVersionMode])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -79,7 +99,11 @@ export function UploadDocumentDialog({
     setError(null)
     setResult(null)
     try {
-      const res = await uploadDocument(file)
+      const res = await uploadDocument(file, {
+        documentId: documentId,
+        title: title || undefined,
+        docType: docType || undefined,
+      })
       setResult(res)
       if (res.success && onUploaded) {
         onUploaded()
@@ -104,10 +128,12 @@ export function UploadDocumentDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileUp className="size-4" />
-            上传文档
+            {isVersionMode ? '上传新版本' : '上传文档'}
           </DialogTitle>
           <DialogDescription>
-            上传文件后自动解析并创建文档，可选入库到 RAG 知识库。
+            {isVersionMode
+              ? '上传文件作为该文档的新版本，将自动清理旧版本数据后重新入库。'
+              : '上传文件后自动解析并创建文档，可选入库到 RAG 知识库。'}
           </DialogDescription>
         </DialogHeader>
 

@@ -608,9 +608,14 @@ class RagChunk(Base):
     version_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True
     )
+    # Chunk-level content hash (sha256[:16]) for embedding cache reuse
+    content_hash: Mapped[str | None] = mapped_column(
+        String(16), name="content_hash", nullable=True, index=True
+    )
 
     __table_args__ = (
         Index("idx_rag_doc_hash", "doc_hash"),
+        Index("idx_rag_content_hash", "content_hash"),
     )
 
 

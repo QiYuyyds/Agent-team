@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, FileText, Loader2, Trash2 } from 'lucide-react'
+import { ArrowLeft, FileText, Loader2, Trash2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { DocumentVersionItem } from '@/components/document-version-item'
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { deleteDocument, getDocument, ingestDocument, listVersions } from '@/lib/api'
+import { UploadDocumentDialog } from '@/components/upload-document-dialog'
 import type { DocumentRow, VersionRow } from '@/shared/types'
 
 function formatTime(ts: number): string {
@@ -48,6 +49,7 @@ export function DocumentDetail({
   const [ingestingId, setIngestingId] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -152,8 +154,19 @@ export function DocumentDetail({
       {/* Version history */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1.5 p-2">
-          <div className="px-1 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            版本历史 ({versions.length})
+          <div className="flex items-center justify-between px-1 py-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              版本历史 ({versions.length})
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-2 text-[10px]"
+              onClick={() => setUploadOpen(true)}
+            >
+              <Upload className="size-3" />
+              上传新版本
+            </Button>
           </div>
           {versions.map((ver) => (
             <DocumentVersionItem
@@ -165,6 +178,16 @@ export function DocumentDetail({
           ))}
         </div>
       </ScrollArea>
+
+      {/* Upload new version dialog */}
+      <UploadDocumentDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        onUploaded={() => void load()}
+        documentId={documentId}
+        defaultTitle={doc?.title}
+        defaultDocType={doc?.docType}
+      />
 
       {/* Delete confirmation */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -129,13 +129,22 @@ class HybridStore:
         contents: List[str],
         parents: List[str],
         embeddings: List[List[float]],
+        *,
+        content_hashes: Optional[List[str]] = None,
+        cache_hit: Optional[List[bool]] = None,
     ) -> List[int]:
-        """Persist chunks to PG + Milvus + ES. KG indexing is best-effort async."""
+        """Persist chunks to PG + Milvus + ES. KG indexing is best-effort async.
+
+        Args:
+            content_hashes: chunk-level sha256[:16] for embedding cache reuse.
+            cache_hit: True = embedding reused from cache, skip KG entity extraction.
+        """
         pg_ids: List[int] = []
 
         for idx, content in enumerate(contents):
             embedding = embeddings[idx] if idx < len(embeddings) else []
             parent_content = parents[idx] if idx < len(parents) else ""
+            ch = content_hashes[idx] if content_hashes and idx < len(content_hashes) else None
             try:
                 async with get_db() as session:
                     row = RagChunk(
@@ -145,6 +154,7 @@ class HybridStore:
                         parent_content=parent_content or None,
                         embedding=embedding,
                         created_at=time.time(),
+                        content_hash=ch,
                     )
                     session.add(row)
                     await session.flush()
@@ -179,13 +189,15 @@ class HybridStore:
                 except Exception as e:
                     logger.warning("ES index failed (pg_id=%s): %s", pg_id, e)
 
-        # KG index (fire-and-forget)
+        # KG index (fire-and-forget) — skip cache-hit chunks (entity already extracted)
         if self._kg_index_fn and self._kg_ok() and pg_ids:
             chunk_refs = [
                 ChunkRef(id=i, pg_id=pid, content=contents[i])
                 for i, pid in enumerate(pg_ids)
+                if not (cache_hit and i < len(cache_hit) and cache_hit[i])
             ]
-            asyncio.create_task(self._kg_index_fn(doc_hash, chunk_refs))
+            if chunk_refs:
+                asyncio.create_task(self._kg_index_fn(doc_hash, chunk_refs))
 
         return pg_ids
 

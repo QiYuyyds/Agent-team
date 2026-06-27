@@ -230,6 +230,24 @@ class DocumentService:
 
     # ─── Delete ────────────────────────────────────────────────────────────
 
+    async def delete_versions_by_document(self, document_id: str) -> int:
+        """Delete all RAG chunks for a document (all versions) from PG + ES + Milvus + KG.
+
+        Delegates to RAGService.delete_by_document_id for the four-way cleanup.
+        Returns the number of PG rows deleted.
+        """
+        if not self._rag:
+            return 0
+        try:
+            return await self._rag.delete_by_document_id(document_id)
+        except Exception as e:
+            logger.warning(
+                "delete_versions_by_document failed for doc %s: %s",
+                document_id,
+                e,
+            )
+            return 0
+
     async def delete_document(self, document_id: str) -> int:
         """Soft-delete document + clean up RAG chunks. Returns deleted chunk count."""
         async with self._get_db() as session:
@@ -276,6 +294,8 @@ class DocumentService:
 
             content_md = ver.content_md
 
+        # Clean old RAG data for this document before re-ingesting
+        await self.delete_versions_by_document(document_id)
         return await self._ingest_content(content_md, document_id, version_id)
 
     # ─── Upload file (one-stop) ────────────────────────────────────────────
@@ -286,12 +306,15 @@ class DocumentService:
         content_type: str,
         data: bytes,
         *,
+        document_id: str = "",
         title: str | None = None,
         doc_type: str = "upload",
     ) -> dict:
         """Parse file → create document → ingest to RAG (one-stop).
 
         Returns UploadResult dict. If needs_ocr, returns early without creating a document.
+        If document_id is provided, creates a new version for the existing document
+        instead of creating a new document.
         """
         result = parse_bytes(filename, content_type, data)
 
@@ -321,6 +344,7 @@ class DocumentService:
         doc_title = title or result.filename or "Untitled"
 
         write_result = await self.write_document(
+            document_id=document_id,
             title=doc_title,
             doc_type=doc_type,
             source="user_upload",
@@ -352,6 +376,9 @@ class DocumentService:
     ) -> dict:
         """Ingest content to RAG and backfill document_id/version_id on chunks."""
         dh = _doc_hash(content_md)
+
+        # Clean old RAG data for this document before ingesting new content
+        await self.delete_versions_by_document(document_id)
 
         # Call RAGService.ingest() to split + embed + index
         chunk_count = 0
