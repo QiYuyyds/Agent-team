@@ -203,7 +203,7 @@ class DocumentService:
                 .join(DocumentVersion, DocumentVersion.document_id == Document.id)
                 .where(
                     Document.status != "deleted",
-                    DocumentVersion.meta["artifactId"].astext == artifact_id,
+                    DocumentVersion.meta["artifactId"].as_string() == artifact_id,
                 )
                 .order_by(desc(Document.updated_at))
                 .limit(1)
