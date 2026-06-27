@@ -441,6 +441,7 @@ def create_app() -> FastAPI:
         messages,
         pending,
         runs_misc,
+        skills,
         stream,
     )
     from app.api import (
@@ -461,6 +462,7 @@ def create_app() -> FastAPI:
     app.include_router(mobile_routes.router, prefix="/api", tags=["mobile"])
     app.include_router(stream.router, prefix="/api", tags=["stream"])
     app.include_router(documents.router, prefix="/api", tags=["documents"])
+    app.include_router(skills.router, prefix="/api", tags=["skills"])
     # deployment preview assets served at root /deployments/{id}/... (no /api prefix);
     # the previewPath the agent emits is /deployments/{id}. Frontend proxies via rewrite.
     app.include_router(deployments.router, tags=["deployments"])

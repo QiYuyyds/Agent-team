@@ -80,6 +80,8 @@ export const toolRegistry = buildRegistry()
 | `fs_write` | 写 workspace 内文本文件 | 写文件系统 | 需要生成 / 修改文件的 agent |
 | `bash` | 在 workspace 内跑 shell 命令 | 进程 / 文件系统 | 需要 git / 编译 / 测试的 agent |
 | `web_search` | 用 Tavily 搜公网 | 调外部 API（`api.tavily.com`，耗 Tavily 额度） | 需要实时联网信息的 custom agent（**opt-in，不自动注入**） |
+| `load_skill` | 按需读回装备 skill 的 `SKILL.md` 正文（渐进式披露） | 读 `<data_dir>/skills/` | custom agent 装备 ≥1 skill 时由 `agent_runner` **自动注入**（详见 openspec/changes/add-agent-skills） |
+| `write_skill` | agent 自建 skill 写入本地 skill 库 | 写 `<data_dir>/skills/<slug>/` | 需要沉淀可复用流程的 custom agent（**opt-in，不自动注入**） |
 
 ### write_artifact
 
@@ -404,6 +406,25 @@ curl -s http://127.0.0.1:3000/health
 **返回**:`{ answer: string | null, results: [{ title, url, content, score }] }`。结果限 **top-5**,每条 `content` 截断到 **2000 字符**(防灌爆 context;Tavily 返回属不可信外部文本,见 §安全)。
 
 **审批**:无审批门(只读外部调用,不改 host / 文件 / 依赖,与 `rag_search` 一致)。
+
+---
+
+### load_skill / write_skill
+
+源文件：`backend/app/tools/skills.py`、`backend/app/services/skill_service.py`
+
+**背景**：skill 是一个含 `SKILL.md`（frontmatter `name` + `description` + 正文）+ 可选附带文件的本地目录，存 `<data_dir>/skills/<slug>/`，**不入库**。agent 通过 `Agent.skill_names`（slug 列表）装备 skill（仅 custom adapter）。完整设计见 `openspec/changes/add-agent-skills`。
+
+**渐进式披露**：`agent_runner` 只把装备 skill 的 `name + description` 注入 system prompt（不注入正文）；当任意 skill 仍存在于 registry 时自动注入 `load_skill`。
+
+- `load_skill({ name })` → 返回 `{ slug, body }`，body 是该 skill `SKILL.md` 去掉 frontmatter 的正文。未装备 / 不存在返回 `err`。
+- `write_skill({ name, description, body, files? })` → 组装 `SKILL.md` 写入 `<data_dir>/skills/<slug>/`，返回 `{ slug, name, description }`。**opt-in**（需在 `tool_names` 显式装备）；slug 重名返回 `err`（不覆盖）。
+
+**命名 / 重名**：slug = `slugify(name)`（kebab-case，清除 Windows 非法字符 `\ / : * ? " < > |` 与空白）；目标目录已存在则拒绝。
+
+**安全**：skill 附带 script **不自动执行**，仅在 agent 显式调 `bash` 时运行，照常过双平台命令黑名单（`getBannedPatterns`）+ workspace 沙箱（`assertPathWithinWorkspace`）。附带文件用 `fs_read` 读、`bash` 跑，不新增文件读取 / 执行原语。
+
+**上传来路**：除 `write_skill` 外，用户还可经 `POST /api/skills/upload`（单文件 / 文件夹 webkitdirectory）创建 skill，三条来路归一到同一落盘结构与 registry。
 
 ---
 

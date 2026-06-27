@@ -68,6 +68,7 @@ def _serialize(row: Agent) -> dict[str, Any]:
         "apiKey": row.api_key,
         "apiBaseUrl": row.api_base_url,
         "toolNames": row.tool_names_list,
+        "skillNames": row.skill_names_list,
         "isBuiltin": row.is_builtin,
         "isOrchestrator": row.is_orchestrator,
         "supportsVision": row.supports_vision,
@@ -172,8 +173,9 @@ async def _create_custom_agent(body: CreateAgentRequest) -> dict[str, Any]:
         created_at=now_ms(),
     )
     agent.capabilities_list = body.capabilities or []
-    # SDK adapters use their own builtin tool set; force empty toolNames.
+    # SDK adapters use their own builtin tool set; force empty toolNames/skillNames.
     agent.tool_names_list = (body.tool_names or []) if adapter_name == "custom" else []
+    agent.skill_names_list = (body.skill_names or []) if adapter_name == "custom" else []
 
     async with get_db() as db:
         db.add(agent)
@@ -191,6 +193,7 @@ _PATCH_ALIASES: set[str] = {
     "modelProvider",
     "modelId",
     "toolNames",
+    "skillNames",
     "supportsVision",
     "apiKey",
     "apiBaseUrl",
@@ -267,6 +270,7 @@ async def _update_custom_agent(
     has_model_id = "model_id" in provided
     has_model_provider = "model_provider" in provided
     has_tool_names = "tool_names" in provided
+    has_skill_names = "skill_names" in provided
 
     async with get_db() as db:
         agent = await db.get(Agent, agent_id)
@@ -337,14 +341,18 @@ async def _update_custom_agent(
             if has_tool_names and body.tool_names is not None:
                 agent.tool_names_list = body.tool_names
                 updated = True
+            if has_skill_names and body.skill_names is not None:
+                agent.skill_names_list = body.skill_names
+                updated = True
         else:
-            # SDK adapter: drop modelProvider/toolNames; clear modelId on switch.
+            # SDK adapter: drop modelProvider/toolNames/skillNames; clear modelId on switch.
             if has_adapter_name and not has_model_id:
                 agent.model_id = None
                 updated = True
-            if has_adapter_name or has_model_provider or has_tool_names:
+            if has_adapter_name or has_model_provider or has_tool_names or has_skill_names:
                 agent.model_provider = None
                 agent.tool_names_list = []
+                agent.skill_names_list = []
                 updated = True
 
         if not updated:

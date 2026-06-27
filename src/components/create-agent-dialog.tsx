@@ -19,8 +19,10 @@ import { Textarea } from '@/components/ui/textarea'
 import type { AgentRow } from '@/db/schema'
 import {
   createAgent,
+  listSkills,
   updateAgent,
   type CreateAgentBody,
+  type SkillSummary,
   type UpdateAgentBody,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -83,6 +85,8 @@ export function CreateAgentDialog({
   const [provider, setProvider] = useState<Provider>('deepseek')
   const [modelId, setModelId] = useState(PROVIDER_DEFAULTS.deepseek.defaultModel)
   const [toolNames, setToolNames] = useState<Set<string>>(new Set(DEFAULT_CUSTOM_AGENT_TOOLS))
+  const [skillNames, setSkillNames] = useState<Set<string>>(new Set())
+  const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
   const [supportsVision, setSupportsVision] = useState(true)
   const [apiKey, setApiKey] = useState('')
   const [apiBaseUrl, setApiBaseUrl] = useState('')
@@ -118,6 +122,7 @@ export function CreateAgentDialog({
               : PROVIDER_DEFAULTS[p].defaultModel),
       )
       setToolNames(new Set(agent.toolNames))
+      setSkillNames(new Set(agent.skillNames))
       setSupportsVision(agent.supportsVision)
       setApiKey(agent.apiKey ?? '')
       setApiBaseUrl(agent.apiBaseUrl ?? '')
@@ -130,6 +135,7 @@ export function CreateAgentDialog({
       setProvider('deepseek')
       setModelId(PROVIDER_DEFAULTS.deepseek.defaultModel)
       setToolNames(new Set(DEFAULT_CUSTOM_AGENT_TOOLS))
+      setSkillNames(new Set())
       setSupportsVision(true)
       setApiKey('')
       setApiBaseUrl('')
@@ -140,6 +146,14 @@ export function CreateAgentDialog({
     setError(null)
     setActiveTab('basic')
   }, [open, agent])
+
+  // 打开对话框时加载可用 skills（custom adapter 才会用到）。
+  useEffect(() => {
+    if (!open) return
+    listSkills()
+      .then(setAvailableSkills)
+      .catch((err) => console.error('[CreateAgentDialog] load skills failed', err))
+  }, [open])
 
   const handleAdapterKindChange = (kind: AdapterKind) => {
     setAdapterKind(kind)
@@ -169,6 +183,15 @@ export function CreateAgentDialog({
     })
   }
 
+  const toggleSkill = (s: string) => {
+    setSkillNames((prev) => {
+      const next = new Set(prev)
+      if (next.has(s)) next.delete(s)
+      else next.add(s)
+      return next
+    })
+  }
+
   const applyToolPreset = (tools: readonly ToolName[]) => {
     setToolNames(new Set(tools))
   }
@@ -194,6 +217,7 @@ export function CreateAgentDialog({
             : PROVIDER_DEFAULTS[p].defaultModel),
     )
     setToolNames(new Set(draft.toolNames))
+    setSkillNames(new Set())
     setSupportsVision(draft.supportsVision)
     setApiKey('')
     setApiBaseUrl('')
@@ -223,6 +247,7 @@ export function CreateAgentDialog({
         modelProvider: isSdkAgent ? undefined : draft.modelProvider,
         modelId: draft.modelId?.trim() || undefined,
         toolNames: isSdkAgent ? [] : draft.toolNames,
+        skillNames: [],
         supportsVision: draft.supportsVision,
       }
       const created = await createAgent(body)
@@ -283,6 +308,7 @@ export function CreateAgentDialog({
           modelProvider: isSdkAgent ? undefined : provider,
           modelId: isSdkAgent ? modelId.trim() || null : modelId.trim(),
           toolNames: isSdkAgent ? [] : Array.from(toolNames),
+          skillNames: isSdkAgent ? [] : Array.from(skillNames),
           supportsVision,
           apiKey: trimmedApiKey || null,
           apiBaseUrl: trimmedApiBaseUrl || null,
@@ -300,6 +326,7 @@ export function CreateAgentDialog({
           modelProvider: isSdkAgent ? undefined : provider,
           modelId: modelId.trim() || undefined,
           toolNames: isSdkAgent ? [] : Array.from(toolNames),
+          skillNames: isSdkAgent ? [] : Array.from(skillNames),
           supportsVision,
           apiKey: trimmedApiKey || undefined,
           apiBaseUrl: trimmedApiBaseUrl || undefined,
@@ -370,6 +397,10 @@ export function CreateAgentDialog({
               <TabsTrigger value="toolsPrompt">
                 <Wrench className="size-3.5" />
                 工具与提示词
+              </TabsTrigger>
+              <TabsTrigger value="skills">
+                <Sparkles className="size-3.5" />
+                技能
               </TabsTrigger>
             </TabsList>
 
@@ -732,6 +763,52 @@ export function CreateAgentDialog({
                     className="min-h-[160px] font-mono text-xs"
                   />
                 </div>
+              </TabsContent>
+
+              <TabsContent value="skills" className="mt-0 space-y-3 py-1">
+                {adapterKind === 'custom' ? (
+                  <div className="grid grid-cols-[80px_1fr] items-start gap-3">
+                    <Label>技能</Label>
+                    {availableSkills.length === 0 ? (
+                      <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+                        还没有技能，去左侧 Skills 上传。
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {availableSkills.map((skill) => (
+                          <label
+                            key={skill.slug}
+                            className={cn(
+                              'flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 transition hover:border-foreground/30',
+                              skillNames.has(skill.slug) && 'border-primary bg-primary/5',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={skillNames.has(skill.slug)}
+                              onChange={() => toggleSkill(skill.slug)}
+                              className="mt-0.5 accent-primary"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium">{skill.name}</span>
+                                <code className="font-mono text-[10px] text-muted-foreground">{skill.slug}</code>
+                              </div>
+                              <div className="mt-0.5 text-[10px] text-muted-foreground">{skill.description}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-[80px_1fr] items-start gap-3">
+                    <Label>技能</Label>
+                    <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+                      仅自建（custom）Agent 支持技能。SDK Agent（Claude Code / Codex）使用各自内置能力。
+                    </div>
+                  </div>
+                )}
               </TabsContent>
             </div>
           </Tabs>

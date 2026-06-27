@@ -36,6 +36,7 @@ from app.tools.plan_tasks import plan_tasks_tool
 from app.tools.read_artifact import read_artifact_tool
 from app.tools.read_attachment import read_attachment_tool
 from app.tools.report_task_result import report_task_result_tool
+from app.tools.skills import load_skill_tool, write_skill_tool
 from app.tools.web_search import web_search_tool
 from app.tools.write_artifact import write_artifact_tool
 
@@ -91,6 +92,9 @@ def _build_registry() -> ToolRegistry:
     reg.register(rag_delete_document_tool)
     reg.register(memory_recall_tool)
     reg.register(web_search_tool)
+    # load_skill is auto-injected per equipped skill; write_skill is opt-in (tool_names).
+    reg.register(load_skill_tool)
+    reg.register(write_skill_tool)
     return reg
 
 

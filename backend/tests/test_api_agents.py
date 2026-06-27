@@ -21,6 +21,7 @@ _AGENT_ROW_KEYS = {
     "apiKey",
     "apiBaseUrl",
     "toolNames",
+    "skillNames",
     "isBuiltin",
     "isOrchestrator",
     "supportsVision",

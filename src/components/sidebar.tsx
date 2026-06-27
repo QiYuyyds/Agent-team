@@ -1,6 +1,6 @@
 'use client'
 
-import { Archive, ArchiveRestore, BarChart3, BookOpen, Bot, ChevronDown, ChevronRight, Layers, MessageSquare, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, BarChart3, BookOpen, Bot, ChevronDown, ChevronRight, Layers, MessageSquare, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { AgentLibrary } from '@/components/agent-library'
@@ -8,6 +8,7 @@ import { AgentAvatar } from '@/components/agent-avatar'
 import { GlobalSearchTrigger } from '@/components/global-search-trigger'
 import { ArtifactLibrary } from '@/components/artifact-library'
 import { KnowledgeLibrary } from '@/components/knowledge-library'
+import { SkillLibrary } from '@/components/skill-library'
 import { NewConversationDialog } from '@/components/new-conversation-dialog'
 import { SettingsButton } from '@/components/settings-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -36,7 +37,7 @@ import { cn } from '@/lib/utils'
 import type { AgentRow, ConversationRow } from '@/db/schema'
 import { useAppStore, useConversationList, useUnreadCount } from '@/stores/app-store'
 
-type Mode = 'conversations' | 'artifacts' | 'agents' | 'analytics' | 'knowledge'
+type Mode = 'conversations' | 'artifacts' | 'agents' | 'analytics' | 'knowledge' | 'skills'
 
 export function Sidebar() {
   const mobileOpen = useAppStore((s) => s.mobileSidebarOpen)
@@ -240,6 +241,14 @@ export function Sidebar() {
           icon={<BookOpen className="size-4" />}
           label="知识库"
         />
+        <TabButton
+          mode={mode}
+          self="skills"
+          collapsed={collapsed}
+          onClick={() => setMode('skills')}
+          icon={<Sparkles className="size-4" />}
+          label="技能"
+        />
       </div>
 
       {/* 内容区按 mode 分发 */}
@@ -388,6 +397,8 @@ export function Sidebar() {
         !collapsed && <AgentLibrary />
       ) : mode === 'knowledge' ? (
         !collapsed && <KnowledgeLibrary />
+      ) : mode === 'skills' ? (
+        !collapsed && <SkillLibrary />
       ) : (
         !collapsed && <UsageDashboard />
       )}

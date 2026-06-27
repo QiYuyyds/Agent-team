@@ -58,7 +58,8 @@ L1 Persistence                          src/db/**（Drizzle+SQLite） + workspac
 | CodexAdapter | ✅ | @openai/codex-sdk + 线程续接 + AgentHub MCP bridge |
 | 自建 Agent | ✅ | 表单/对话式创建,自定义 prompt + 工具集 |
 | Orchestrator 编排 | ✅ | 三阶段规划 + DAG 调度 + 级联中止 + 可视化卡 + 同波次代码冲突检测（检测+上报，不自动合并） |
-| 工具系统 | ✅ | write/deploy/read_artifact · read_attachment · fs_read/fs_write/bash · plan_tasks · ask_user |
+| 工具系统 | ✅ | write/deploy/read_artifact · read_attachment · fs_read/fs_write/bash · plan_tasks · ask_user · web_search · load_skill/write_skill |
+| Agent Skills | ✅ | custom agent 装备 skill（`skill_names`）· 左侧 Skills 入口上传文件/文件夹 · 内容存 `<data_dir>/skills/` 不入库 · 渐进式披露（仅注入 name+desc，`load_skill` 按需读正文）· `write_skill` opt-in 自建（add-agent-skills） |
 | Artifact 预览/编辑 | ✅ | web_app(iframe + preview URL + 本地静态发布/源码包/容器包) / document(md) / image / 版本对比 diff（历史 diff 只读兼容） / **ppt(幻灯片分页预览 + 完整 theme token + 导出真 .pptx)** · code_file workspace 预览/编辑 · 版本链 v1↔v2 · 选区改写 · 面板内编辑(CodeMirror)→提交新版本 · 导出 |
 | Workspace 沙箱 | ✅ | sandbox/local 双模式 · fs_write 审批(Review/Auto) · 双平台 Bash 黑名单 |
 | Token 计量 | ✅ | per-run/per-message · cache 命中率 · 全局分析 Tab |

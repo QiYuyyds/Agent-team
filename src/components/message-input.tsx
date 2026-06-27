@@ -42,10 +42,12 @@ import {
   clearConversationHistory as clearConversationHistoryAPI,
   compactConversation as compactConversationAPI,
   fetchMessages,
+  listSkills,
   reviseDispatchPlan,
   sendMessage as sendMessageAPI,
   setFsWriteApprovalMode,
   setRagMode,
+  type SkillSummary,
   uploadAttachment as uploadAttachmentAPI,
 } from '@/lib/api'
 import { getToolDisplayName } from '@/lib/tool-display'
@@ -240,11 +242,13 @@ function safeFileName(value: string): string {
 export function MessageInput({ conversationId }: { conversationId: string }) {
   const [content, setContent] = useState('')
   const [mentionedIds, setMentionedIds] = useState<string[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null)
   const [highlight, setHighlight] = useState(0)
   const [slashTrigger, setSlashTrigger] = useState<SlashTrigger | null>(null)
   const [slashHighlight, setSlashHighlight] = useState(0)
   const [slashHelpOpen, setSlashHelpOpen] = useState(false)
+  const [allSkills, setAllSkills] = useState<SkillSummary[]>([])
   const [clearHistoryOpen, setClearHistoryOpen] = useState(false)
   const [clearingHistory, setClearingHistory] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -352,11 +356,36 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
     [clearingHistory, exporting, isRunning, pending.length, sending, uploading.length],
   )
 
+  // Skills equipped by this conversation's agents → /-menu entries (custom agents only).
+  const skillCommands = useMemo<SlashCommandItem[]>(() => {
+    if (!conversation) return []
+    const slugs = new Set<string>()
+    for (const id of conversation.agentIds) {
+      for (const slug of agents[id]?.skillNames ?? []) slugs.add(slug)
+    }
+    if (slugs.size === 0) return []
+    return allSkills
+      .filter((s) => slugs.has(s.slug))
+      .map((s) => ({
+        id: `skill:${s.slug}`,
+        command: `/${s.slug}`,
+        label: s.name,
+        description: s.description || '让当前 Agent 使用该技能',
+        icon: Sparkles,
+      }))
+  }, [conversation, agents, allSkills])
+
+  // Skills first so equipped skills are visible without scrolling past built-ins.
+  const allSlashCommands = useMemo(
+    () => [...skillCommands, ...slashCommands],
+    [slashCommands, skillCommands],
+  )
+
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) return []
     const q = slashTrigger.query.toLowerCase()
-    if (!q) return slashCommands
-    return slashCommands.filter((command) =>
+    if (!q) return allSlashCommands
+    return allSlashCommands.filter((command) =>
       [
         command.id,
         command.command,
@@ -365,7 +394,7 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
         command.description,
       ].some((value) => value.toLowerCase().includes(q)),
     )
-  }, [slashTrigger, slashCommands])
+  }, [slashTrigger, allSlashCommands])
 
   // 候选变化时重置高亮项
   useEffect(() => {
@@ -376,10 +405,18 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
     setSlashHighlight(0)
   }, [slashTrigger?.query, filteredSlashCommands.length])
 
+  // Load skill metadata once so /-menu can show skills bound to this conversation's agents.
+  useEffect(() => {
+    listSkills()
+      .then(setAllSkills)
+      .catch((err) => console.error('[MessageInput] load skills failed', err))
+  }, [])
+
   // 切换会话清空 state（pending 由 store 自己分桶，不需要在这里清）
   useEffect(() => {
     setContent('')
     setMentionedIds([])
+    setSelectedSkills([])
     setTrigger(null)
     setSlashTrigger(null)
     setUploading([])
@@ -465,6 +502,27 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
     })
   }
 
+  // Picking a skill drops the /-fragment and adds a chip; the directive is
+  // assembled into the outgoing message on send (keeps the composer clean).
+  const addSkill = (slug: string) => {
+    if (!slashTrigger) return
+    const cursor = textareaRef.current?.selectionStart ?? content.length
+    const newContent = content.slice(0, slashTrigger.start) + content.slice(cursor)
+    setContent(newContent)
+    setSelectedSkills((prev) => (prev.includes(slug) ? prev : [...prev, slug]))
+    setTrigger(null)
+    setSlashTrigger(null)
+    requestAnimationFrame(() => {
+      const pos = slashTrigger.start
+      textareaRef.current?.setSelectionRange(pos, pos)
+      textareaRef.current?.focus()
+    })
+  }
+
+  const removeSkill = (slug: string) => {
+    setSelectedSkills((prev) => prev.filter((s) => s !== slug))
+  }
+
   const removeMention = (id: string) => {
     setMentionedIds((prev) => prev.filter((x) => x !== id))
   }
@@ -497,6 +555,7 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
   const clearSlashCommandInput = () => {
     setContent('')
     setMentionedIds([])
+    setSelectedSkills([])
     setTrigger(null)
     setSlashTrigger(null)
   }
@@ -591,6 +650,10 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
 
   const executeSlashCommand = async (command: SlashCommandItem) => {
     if (command.disabled) return
+    if (command.id.startsWith('skill:')) {
+      addSkill(command.id.slice('skill:'.length))
+      return
+    }
     switch (command.id) {
       case 'deploy':
         await executeDeployCommand()
@@ -699,18 +762,24 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
       return
     }
 
-    if ((!text && !hasAttachments) || sending || isRunning) return
+    if ((!text && !hasAttachments && selectedSkills.length === 0) || sending || isRunning) return
 
-    const exactSlashCommand = slashCommands.find((command) => command.command === text)
+    const exactSlashCommand = allSlashCommands.find((command) => command.command === text)
     if (exactSlashCommand) {
       await executeSlashCommand(exactSlashCommand)
       return
     }
 
     // 选区改写：把 pendingQuote 注入消息开头（XML 块给 LLM 当上下文）
-    const finalContent = pendingQuote
+    const baseContent = pendingQuote
       ? `<quoted_selection source="${pendingQuote.sourceLabel}"${pendingQuote.artifactId ? ` artifactId="${pendingQuote.artifactId}"` : ''}${pendingQuote.filePath ? ` filePath="${pendingQuote.filePath}"` : ''}>\n${pendingQuote.text}\n</quoted_selection>\n\n${text}`
       : text
+    // 技能 chip → 指令前缀，驱动 agent load_skill 并使用对应技能
+    const skillDirective =
+      selectedSkills.length > 0
+        ? selectedSkills.map((s) => `使用技能 ${s}`).join('；') + '：\n\n'
+        : ''
+    const finalContent = skillDirective + baseContent
 
     const tempId = `temp_${nanoid()}`
     const parentId = replyTargetId ?? undefined
@@ -724,6 +793,7 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
     })
     setContent('')
     setMentionedIds([])
+    setSelectedSkills([])
     setTrigger(null)
     setSlashTrigger(null)
     if (pendingQuote) setPendingQuote(null)
@@ -849,6 +919,29 @@ export function MessageInput({ conversationId }: { conversationId: string }) {
           ))}
           {uploading.map((u) => (
             <PendingAttachmentChip key={u.tempId} fileName={u.name} />
+          ))}
+        </div>
+      )}
+
+      {/* 已选技能 chips（浅色气泡，/slug） */}
+      {selectedSkills.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          {selectedSkills.map((slug) => (
+            <span
+              key={slug}
+              className="inline-flex items-center gap-1 rounded-full bg-primary/10 py-0.5 pl-2 pr-1.5 font-mono text-xs text-primary"
+            >
+              <Sparkles className="size-3" />
+              <span>/{slug}</span>
+              <button
+                type="button"
+                onClick={() => removeSkill(slug)}
+                className="rounded-full p-0.5 hover:bg-primary/20"
+                title="移除技能"
+              >
+                <X className="size-3" />
+              </button>
+            </span>
           ))}
         </div>
       )}

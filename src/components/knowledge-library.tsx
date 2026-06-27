@@ -8,7 +8,7 @@ import { UploadDocumentDialog } from '@/components/upload-document-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { deleteDocument, fetchDocuments } from '@/lib/api'
+import { deleteDocument, fetchDocuments, uploadDocument } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { DocumentRow } from '@/shared/types'
 
@@ -45,6 +45,9 @@ export function KnowledgeLibrary() {
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -78,6 +81,27 @@ export function KnowledgeLibrary() {
   const handleUploaded = useCallback(() => {
     void refresh()
   }, [refresh])
+
+  // Drag-drop upload: each dropped file becomes one document.
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      setDragOver(false)
+      const files = Array.from(e.dataTransfer.files)
+      if (files.length === 0) return
+      setUploading(true)
+      setUploadError(null)
+      try {
+        for (const file of files) await uploadDocument(file)
+        await refresh()
+      } catch (err) {
+        setUploadError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setUploading(false)
+      }
+    },
+    [refresh],
+  )
 
   const handleDelete = async () => {
     if (!deleteTargetId) return
@@ -137,6 +161,26 @@ export function KnowledgeLibrary() {
             上传
           </Button>
         </div>
+        {/* Drop zone — drag files in to upload as documents */}
+        <div
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => void handleDrop(e)}
+          className={cn(
+            'mt-2 rounded-md border border-dashed px-3 py-2 text-center text-[10px] transition',
+            dragOver ? 'border-primary bg-primary/5 text-primary' : 'text-muted-foreground',
+          )}
+        >
+          {uploading ? '上传中...' : '拖入文档上传，或点「上传」选择'}
+        </div>
+        {uploadError && (
+          <div className="mt-1.5 rounded-md border border-red-500/30 bg-red-50/30 px-2 py-1.5 text-[10px] text-red-700 dark:bg-red-950/10 dark:text-red-400">
+            {uploadError}
+          </div>
+        )}
         <div className="mt-1 text-[10px] text-muted-foreground">
           {loading ? '加载中...' : `共 ${filtered.length} 篇文档`}
         </div>

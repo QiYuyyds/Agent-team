@@ -103,6 +103,9 @@ class Agent(Base):
 
     tool_names: Mapped[list] = mapped_column(JSONB, name="tool_names", nullable=False, default=list)
 
+    # Skills the agent has equipped (slugs under <data_dir>/skills/). custom adapter only.
+    skill_names: Mapped[list] = mapped_column(JSONB, name="skill_names", nullable=False, default=list)
+
     is_builtin: Mapped[bool] = mapped_column(
         Boolean, name="is_builtin", nullable=False, default=False
     )
@@ -137,6 +140,15 @@ class Agent(Base):
     @tool_names_list.setter
     def tool_names_list(self, value: list[str]) -> None:
         self.tool_names = value
+
+    @property
+    def skill_names_list(self) -> list[str]:
+        """Get skill_names as Python list (JSONB already returns list)."""
+        return list(self.skill_names) if self.skill_names else []
+
+    @skill_names_list.setter
+    def skill_names_list(self, value: list[str]) -> None:
+        self.skill_names = value
 
 
 class Conversation(Base):

@@ -12,7 +12,27 @@
       "Bash(.venv/Scripts/python.exe -m ruff check app/adapters/custom_adapter.py tests/test_custom_adapter.py)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_mock_adapter.py -q)",
       "Bash(.venv/Scripts/python.exe -m ruff check app/adapters/mock_adapter.py tests/test_mock_adapter.py)",
-      "Bash(.venv/Scripts/python.exe -c \"from app.adapters.custom_adapter import CustomAdapter; print\\('import ok'\\)\")"
+      "Bash(.venv/Scripts/python.exe -c \"from app.adapters.custom_adapter import CustomAdapter; print\\('import ok'\\)\")",
+      "WebFetch(domain:docs.claude.com)",
+      "Bash(npx openspec *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('STATE:', d.get\\('state'\\)\\); print\\('CONTEXT FILES:', json.dumps\\(d.get\\('contextFiles'\\), indent=2\\)\\); print\\('PROGRESS:', d.get\\('progress'\\)\\)\")",
+      "Bash(python -m pytest tests/test_skill_service.py -q)",
+      "Bash(grep -iA3 pytest)",
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_skill_service.py -q)",
+      "Bash(./.venv/Scripts/python.exe -c \"import app.main; import app.tools.registry; import app.api.skills; import app.api.agents; import app.services.skill_service; print\\('imports OK'\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_skill_service.py tests/test_api_agents.py -q)",
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_api_skills.py -q)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/services/skill_service.py app/tools/skills.py app/api/skills.py app/db/engine.py app/db/models.py app/api/agents.py app/services/agent_runner.py app/schemas/requests.py tests/test_skill_service.py tests/test_api_skills.py tests/test_skills_tools.py)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/services/skill_service.py app/tools/skills.py app/api/skills.py app/db/engine.py)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/services/skill_service.py app/tools/skills.py app/api/skills.py app/db/engine.py tests/test_skill_service.py tests/test_api_skills.py tests/test_skills_tools.py)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/services/agent_runner.py app/api/agents.py app/schemas/requests.py app/db/models.py app/tools/registry.py)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/db/models.py)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm lint *)",
+      "Bash(curl -s http://127.0.0.1:8000/api/agents)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(a.get\\('name'\\), '| adapter=',a.get\\('adapterName'\\), '| skillNames=',a.get\\('skillNames'\\)\\) for a in d.get\\('agents',[]\\)]\")",
+      "Bash(curl -s http://127.0.0.1:8000/api/skills)",
+      "Bash(python -m json.tool)"
     ]
   }
 }
