@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText, FolderGit2, Image as ImageIcon, Layers, Loader2, Presentation, Search, Trash2 } from 'lucide-react'
+import { BookPlus, Check, FileText, FolderGit2, Image as ImageIcon, Layers, Loader2, Presentation, Search, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import {
@@ -14,7 +14,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { deleteArtifact, fetchArtifact, fetchArtifacts, type ArtifactListItem } from '@/lib/api'
+import {
+  deleteArtifact,
+  fetchArtifact,
+  fetchArtifacts,
+  ingestArtifactToKnowledgeBase,
+  type ArtifactListItem,
+} from '@/lib/api'
 import { groupArtifactVersions } from '@/lib/artifact-groups'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/app-store'
@@ -38,6 +44,9 @@ export function ArtifactLibrary({
   const [pendingPreviewId, setPendingPreviewId] = useState<string | null>(null)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [ingestStatus, setIngestStatus] = useState<
+    Record<string, 'loading' | 'done' | 'exists' | 'error'>
+  >({})
 
   const upsertArtifact = useAppStore((s) => s.upsertArtifact)
   const openArtifactPreview = useAppStore((s) => s.openArtifactPreview)
@@ -118,6 +127,22 @@ export function ArtifactLibrary({
       console.error('[ArtifactLibrary] preview load failed', err)
     } finally {
       setPendingPreviewId(null)
+    }
+  }
+
+  const handleIngest = async (id: string) => {
+    setIngestStatus((s) => ({ ...s, [id]: 'loading' }))
+    try {
+      let artifact = artifactsById[id]
+      if (!artifact) {
+        artifact = await fetchArtifact(id)
+        upsertArtifact(artifact)
+      }
+      const res = await ingestArtifactToKnowledgeBase(artifact)
+      setIngestStatus((s) => ({ ...s, [id]: res.alreadyImported ? 'exists' : 'done' }))
+    } catch (err) {
+      console.error('[ArtifactLibrary] ingest failed', err)
+      setIngestStatus((s) => ({ ...s, [id]: 'error' }))
     }
   }
 
@@ -214,19 +239,27 @@ export function ArtifactLibrary({
                         )}
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setDeleteTargetId(latest.id)
-                      }}
-                      title="删除最新版本"
-                      className={cn(
-                        'shrink-0 self-center opacity-0 transition group-hover:opacity-100 hover:text-red-600',
+                    <div className="flex shrink-0 items-center gap-1.5 self-center">
+                      {latest.type === 'document' && (
+                        <IngestButton
+                          status={ingestStatus[latest.id]}
+                          onClick={() => void handleIngest(latest.id)}
+                        />
                       )}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDeleteTargetId(latest.id)
+                        }}
+                        title="删除最新版本"
+                        className={cn(
+                          'shrink-0 opacity-0 transition group-hover:opacity-100 hover:text-red-600',
+                        )}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   {versions.length > 1 && (
@@ -289,6 +322,52 @@ export function ArtifactLibrary({
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+function IngestButton({
+  status,
+  onClick,
+}: {
+  status?: 'loading' | 'done' | 'exists' | 'error'
+  onClick: () => void
+}) {
+  const settled = status === 'done' || status === 'exists' || status === 'error'
+  const title =
+    status === 'done'
+      ? '已加入知识库'
+      : status === 'exists'
+        ? '该产物已在知识库中'
+        : status === 'error'
+          ? '加入失败，点击重试'
+          : '加入知识库'
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      disabled={status === 'loading'}
+      title={title}
+      className={cn(
+        'shrink-0 transition',
+        settled ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+        status === 'done' || status === 'exists'
+          ? 'text-green-600'
+          : status === 'error'
+            ? 'text-red-600'
+            : 'hover:text-primary',
+      )}
+    >
+      {status === 'loading' ? (
+        <Loader2 className="size-3.5 animate-spin" />
+      ) : status === 'done' || status === 'exists' ? (
+        <Check className="size-3.5" />
+      ) : (
+        <BookPlus className="size-3.5" />
+      )}
+    </button>
   )
 }
 

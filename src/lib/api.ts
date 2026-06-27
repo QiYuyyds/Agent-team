@@ -851,6 +851,24 @@ export async function createDocument(body: CreateDocumentRequest): Promise<Write
   )
 }
 
+// Import a `document`-type artifact into the knowledge base. Idempotent by artifactId.
+export async function ingestArtifactToKnowledgeBase(
+  artifact: ArtifactRow,
+): Promise<WriteDocumentResponse> {
+  const content = artifact.content
+  if (content.type !== 'document' || content.format !== 'markdown' || !content.content.trim()) {
+    throw new Error('只有 markdown 格式的 document 类型产物才能加入知识库')
+  }
+  return createDocument({
+    title: artifact.title,
+    docType: 'document',
+    source: 'artifact_import',
+    contentMd: content.content,
+    ingestToRag: true,
+    metadata: { artifactId: artifact.id, conversationId: artifact.conversationId },
+  })
+}
+
 export async function getDocument(documentId: string): Promise<{ document: DocumentRow; version: VersionRow }> {
   return json<{ document: DocumentRow; version: VersionRow }>(
     fetch(`${API_BASE_URL}/api/documents/${documentId}`),
