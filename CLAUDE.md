@@ -1,6 +1,6 @@
-# CLAUDE.md — AgentHub 项目 AI 协作主文档
+# CLAUDE.md — AChat 项目 AI 协作主文档
 
-> 这是 AgentHub 项目的「项目级 AI 协作约定」。任何 AI 协作工具（Claude Code、Cursor、Codex 等）在本项目工作时**必须**先读此文档，再开始任务。
+> 这是 AChat 项目的「项目级 AI 协作约定」。任何 AI 协作工具（Claude Code、Cursor、Codex 等）在本项目工作时**必须**先读此文档，再开始任务。
 >
 > 本文档与 `openspec/`、`specs/` 配套：CLAUDE.md 定**规则**（怎么做、不做什么），`openspec/specs/` 定 OpenSpec 能力契约，`specs/` 保留编号版详细规格。
 >
@@ -10,7 +10,7 @@
 
 ## 1. 项目背景
 
-**AgentHub** 是一个多 Agent 协作平台。一句话定位：
+**AChat** 是一个多 Agent 协作平台。一句话定位：
 
 > 把多 Agent 协作做成 IM 群聊体验。Agent 是「联系人」，对话是「工作空间」，Orchestrator 是「群里的项目经理」。
 

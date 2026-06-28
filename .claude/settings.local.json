@@ -38,7 +38,11 @@
       "Bash(grep -q \"Ready\\\\|started server\\\\|Local:\" /tmp/agenthub-dev.log)",
       "Bash(break)",
       "Read(//tmp/**)",
-      "mcp__plugin_superpowers-chrome_chrome__use_browser"
+      "mcp__plugin_superpowers-chrome_chrome__use_browser",
+      "Bash(xargs -d '\\\\n' sed -i 's/AgentHub/AChat/g')",
+      "Bash(xargs -d '\\\\n' grep -c \"AgentHub\")",
+      "Bash(grep -v \":0$\")",
+      "Bash(pnpm vitest *)"
     ]
   }
 }

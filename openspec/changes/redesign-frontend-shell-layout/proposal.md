@@ -8,7 +8,7 @@
 
 ## What Changes
 
-- **左栏一拆为二**：现有 `sidebar.tsx` 顶部 6 个垂直 tab（对话/产物库/Agents/分析/知识库/技能）抽成独立的 56px **图标轨**（active 指示条 + hover tooltip，⚙设置/🌗主题沉到轨底）；会话列表（含 AgentHub 标题块、搜索、列表、归档区）独占第二栏 240px。导航与上下文不再共用一根柱子。
+- **左栏一拆为二**：现有 `sidebar.tsx` 顶部 6 个垂直 tab（对话/产物库/Agents/分析/知识库/技能）抽成独立的 56px **图标轨**（active 指示条 + hover tooltip，⚙设置/🌗主题沉到轨底）；会话列表（含 AChat 标题块、搜索、列表、归档区）独占第二栏 240px。导航与上下文不再共用一根柱子。
 - **副面板改滑入覆盖**：`page.tsx` 的 `FileExplorerPanel` / `ArtifactPreviewPanel` 从常驻平铺改为**从右侧滑入的 overlay**（覆盖在主区之上，带遮罩/可点外部关闭），不再挤压主聊天区。触发按钮仍是右上角 header 现有的那几个图标，**外观不变，仅行为从「展开平铺栏」改为「滑入覆盖」**。
 - **彩色用法收敛**：把散落在非关键处的 `text-primary`/`ring-primary`/`bg-warning/10` 等彩色降级为中性灰，电光靛只保留在主 CTA 与当前选中态；`--border` 略提对比以靠细边框（而非阴影）撑 figure-ground；列表项/段落间距从 `py-1.5`/`py-2` 紧凑值放宽，给出呼吸节奏。
 - **显式不变（约束）**：右上角 header 的内容、图标集合与视觉外观保持原样；不新增依赖；不改任何 store/SSE/路由/数据契约；`apps/mobile/` 不受影响。

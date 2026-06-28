@@ -1,4 +1,4 @@
-# AgentHub
+# AChat
 
 <p align="center">
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white">
@@ -14,19 +14,19 @@
   <b>简体中文</b>
 </p>
 
-AgentHub 是一个基于前端（Next.js + React）和 Python（FastAPI）实现的多 Agent 协作工作空间，把 AI 协作做成 IM 群聊式的体验。
+AChat 是一个基于前端（Next.js + React）和 Python（FastAPI）实现的多 Agent 协作工作空间，把 AI 协作做成 IM 群聊式的体验。
 
 它不把每次 agent 运行当成一段孤立的终端记录，而是围绕「会话」来组织工作：Agent 是联系人，会话是工作空间，文件与产物是共享上下文，Orchestrator 还能把一项工作拆给多个 Agent 并行完成。同时集成了 RAG 混合检索、分层记忆系统和 Document 知识库，让 Agent 拥有跨会话的知识与记忆能力。
 
 <p align="center">
-    <img src="docs/images/agenthub-preview.png" alt="AgentHub 多 Agent 协作与产物预览" width="100%" />
+    <img src="docs/images/agenthub-preview.png" alt="AChat 多 Agent 协作与产物预览" width="100%" />
 </p>
 
 > 当前状态：本地开发中。Web 版可用；桌面版与移动伴随端开发中。
 
 ## 目录
 
-- [为什么选 AgentHub](#为什么选-agenthub)
+- [为什么选 AChat](#为什么选-agenthub)
 - [功能特性](#功能特性)
   - [IM 式 Agent 工作空间](#im-式-agent-工作空间)
   - [多 Agent 支持](#多-agent-支持)
@@ -50,7 +50,7 @@ AgentHub 是一个基于前端（Next.js + React）和 Python（FastAPI）实现
 
 ---
 
-## 为什么选 AgentHub
+## 为什么选 AChat
 
 如今的编码 Agent 很强，但真实工作往往不止一个 prompt：
 
@@ -62,7 +62,7 @@ AgentHub 是一个基于前端（Next.js + React）和 Python（FastAPI）实现
 - 把文档灌入知识库，让 Agent 按需检索
 - 在桌面端继续工作，未来还能用手机监看
 
-AgentHub 正是为这套工作流而生。它默认本地运行，使用 PostgreSQL，并把 Agent 的执行保留在你自己的机器上。
+AChat 正是为这套工作流而生。它默认本地运行，使用 PostgreSQL，并把 Agent 的执行保留在你自己的机器上。
 
 ---
 
@@ -98,7 +98,7 @@ Orchestrator 是一个带额外工具的普通 Agent。它可以：
 
 ### RAG 混合检索与知识库
 
-AgentHub 集成了完整的 RAG（检索增强生成）管线：
+AChat 集成了完整的 RAG（检索增强生成）管线：
 
 - **三路混合检索**：Milvus（向量语义）+ Elasticsearch（全文 BM25）+ Neo4j（知识图谱子图遍历），通过 RRF 融合排序。
 - **Query Rewriting**：LLM 生成扩展查询，提升召回率。
@@ -143,7 +143,7 @@ Agent 可以创建并引用结构化产物：
 
 - 支持 Electron 桌面打包（可选）。
 - `apps/mobile` 下有一个 Capacitor 移动伴随端。
-- 设想的移动端工作方式是「伴随客户端」：手机通过 LAN 或 Tailscale 连到桌面端的 AgentHub host，然后观察运行、发消息、处理审批。
+- 设想的移动端工作方式是「伴随客户端」：手机通过 LAN 或 Tailscale 连到桌面端的 AChat host，然后观察运行、发消息、处理审批。
 
 ---
 
@@ -279,7 +279,7 @@ API key 既可以配在 `backend/.env`，也可以在应用的设置面板里配
 
 ## 基础设施服务
 
-AgentHub 的基础设施服务通过 Docker Compose 管理，提供两种编排文件：
+AChat 的基础设施服务通过 Docker Compose 管理，提供两种编排文件：
 
 | 文件 | 用途 |
 |---|---|
@@ -383,7 +383,7 @@ pnpm mobile:open:ios
 pnpm mobile:open:android
 ```
 
-移动端被设计成通过 LAN 或 Tailscale 连接桌面端的 AgentHub host。Agent 执行、文件写入、命令执行和 workspace 状态都留在桌面侧。
+移动端被设计成通过 LAN 或 Tailscale 连接桌面端的 AChat host。Agent 执行、文件写入、命令执行和 workspace 状态都留在桌面侧。
 
 ---
 
@@ -416,7 +416,7 @@ pnpm electron:build                # 桌面打包
 
 ## 架构
 
-AgentHub 采用前后端分离架构：
+AChat 采用前后端分离架构：
 
 ```
 ┌──────────────────────────────────────────┐
@@ -459,7 +459,7 @@ AgentHub 采用前后端分离架构：
 
 ## 安全模型
 
-AgentHub 假定 LLM 的输出是不可信输入。
+AChat 假定 LLM 的输出是不可信输入。
 
 - 文件工具把路径解析到会话生效的 workspace 之内。
 - Bash 命令在 workspace cwd 内运行。
@@ -476,7 +476,7 @@ AgentHub 假定 LLM 的输出是不可信输入。
 
 - 桌面版尚待改造：内嵌 Next 已无后端 API 路由，需改为启动独立 Python 后端。
 - 带原生模块的跨平台 Electron 构建，应该通过目标平台机器或 CI 处理。
-- Claude / Custom Adapter 可以通过它自己的工具层写文件；sandbox 配额只对 AgentHub 托管的文件工具生效。
+- Claude / Custom Adapter 可以通过它自己的工具层写文件；sandbox 配额只对 AChat 托管的文件工具生效。
 - 移动端是伴随客户端，不是独立的 Agent 运行时。
 - 基础设施服务（Milvus / ES / Neo4j）不配时功能降级，但不影响核心对话。
 

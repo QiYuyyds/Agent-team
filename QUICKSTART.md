@@ -1,6 +1,6 @@
-# AgentHub 快速启动指南
+# AChat 快速启动指南
 
-> 本指南帮助你从零搭建 AgentHub 本地开发环境。项目为前后端分离架构：前端 Next.js + 后端 Python FastAPI + PostgreSQL 主库 + 可选基础设施（Milvus / Elasticsearch / Neo4j）。
+> 本指南帮助你从零搭建 AChat 本地开发环境。项目为前后端分离架构：前端 Next.js + 后端 Python FastAPI + PostgreSQL 主库 + 可选基础设施（Milvus / Elasticsearch / Neo4j）。
 
 ## 环境要求
 
@@ -29,7 +29,7 @@ pnpm install
 
 ## 3. 启动基础设施服务（推荐）
 
-AgentHub 后端依赖 PostgreSQL 作为主库。RAG 混合检索和记忆系统还需要 Milvus、Elasticsearch、Neo4j（可降级，不配也能跑）。
+AChat 后端依赖 PostgreSQL 作为主库。RAG 混合检索和记忆系统还需要 Milvus、Elasticsearch、Neo4j（可降级，不配也能跑）。
 
 ### 方式 A：一键启动全部基础设施（Docker Compose）
 

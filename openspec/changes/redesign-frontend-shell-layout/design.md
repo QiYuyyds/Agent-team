@@ -32,7 +32,7 @@ Sidebar(288) | ChatPanel(flex-1) | FileExplorerPanel(按需) | ArtifactPreviewPa
 ```
 ┌────┬─────────────┐
 │ 56 │   240       │
-│ 💬 │ AgentHub    │ ← 标题块整体搬到列表栏顶，内容不改，仅所在栏变窄
+│ 💬 │ AChat    │ ← 标题块整体搬到列表栏顶，内容不改，仅所在栏变窄
 │ ▣  │ 多Agent协作 │
 │ 🤖 ├─────────────┤
 │ 📊 │ 搜索        │
@@ -46,7 +46,7 @@ Sidebar(288) | ChatPanel(flex-1) | FileExplorerPanel(按需) | ArtifactPreviewPa
 - 图标轨：6 个 mode 各一个图标按钮，active 用 2px 左色条 + 主色锚定（沿用 visual-system 的 active 表达），hover 出 tooltip（label）。⚙/🌗 沉到轨底。
 - 第二栏宽度 240（原 288，因导航已外移）。
 - collapsed 态简化：图标轨常驻，第二栏可整体收起（替代原 `collapsed` 双形态逻辑，减一套分支）。
-- AgentHub 标题块（`h1` + 副标题）原样保留，只是 DOM 上落到第二栏顶部。
+- AChat 标题块（`h1` + 副标题）原样保留，只是 DOM 上落到第二栏顶部。
 
 **为什么不做右上角 [视图▾]**：用户明确要求右上角不动；原探索方案里的 header 收纳（[视图▾]/[⋯]）撤销。
 

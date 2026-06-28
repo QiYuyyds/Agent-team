@@ -1,4 +1,4 @@
-# AgentHub 架构与目录说明
+# AChat 架构与目录说明
 
 > 本文档描述项目的整体架构、目录结构与数据流，反映后端迁移到 Python (FastAPI) 并集成 RAG / 记忆 / 知识图谱 / Document 知识库体系后的最新状态。
 >
@@ -8,7 +8,7 @@
 
 ## 1. 项目定位
 
-**AgentHub** 是一个 local-first 的多 Agent 协作平台。一句话：
+**AChat** 是一个 local-first 的多 Agent 协作平台。一句话：
 
 > 把多 Agent 协作做成 IM 群聊体验。Agent 是「联系人」，对话是「工作空间」，Orchestrator 是「群里的项目经理」。
 
