@@ -50,7 +50,7 @@ import { useAppStore } from '@/stores/app-store'
 type AgentTab = 'basic' | 'model' | 'toolsPrompt'
 type CreateStep = 'choose' | 'wizard' | 'detail'
 
-const DEFAULT_CUSTOM_SYSTEM_PROMPT = `你是一个 AgentHub custom agent。你的任务是理解用户目标，使用已启用的工具完成工作，并把结果清晰交付给用户。
+const DEFAULT_CUSTOM_SYSTEM_PROMPT = `你是一个 AChat custom agent。你的任务是理解用户目标，使用已启用的工具完成工作，并把结果清晰交付给用户。
 
 工作原则：
 1. 先判断需要什么上下文；只有在用户提到附件、已有产物或工作区文件时，才调用对应读取工具。
@@ -672,7 +672,7 @@ export function CreateAgentDialog({
                       {adapterKind === 'claude-code' && apiBaseUrl.trim() ? (
                         <>填写后作为 <code className="font-mono">ANTHROPIC_AUTH_TOKEN</code> 传给 SDK，路由到自定义 Base URL；留空则透传空 token（第三方网关可能拒绝）</>
                       ) : adapterKind === 'codex' && apiBaseUrl.trim() ? (
-                        <>填写后作为 <code className="font-mono">CODEX_API_KEY</code> 传给 SDK，路由到自定义 Codex/Responses Base URL；留空则走 AgentHub 设置或环境变量</>
+                        <>填写后作为 <code className="font-mono">CODEX_API_KEY</code> 传给 SDK，路由到自定义 Codex/Responses Base URL；留空则走 AChat 设置或环境变量</>
                       ) : adapterKind === 'custom' && provider === 'openai-compatible' ? (
                         <>OpenAI-compatible provider 需要为该 agent 单独填写 API Key；不会使用全局 OpenAI / DeepSeek / 火山方舟 key。</>
                       ) : (
@@ -787,12 +787,12 @@ export function CreateAgentDialog({
                       {adapterKind === 'claude-code' ? (
                         <>
                           Claude Code agent 使用 SDK 内置工具集：Bash / Read / Write / Edit / Grep / Glob /
-                          WebFetch / WebSearch / Task / TodoWrite 等。审批 / 沙箱 / 黑名单仍由 AgentHub 接管。
+                          WebFetch / WebSearch / Task / TodoWrite 等。审批 / 沙箱 / 黑名单仍由 AChat 接管。
                         </>
                       ) : (
                         <>
                           Codex agent 使用 Codex SDK 内置的本地命令、文件修改、MCP 调用和计划事件。
-                          Review 模式下以只读沙箱运行；Auto 模式下允许 workspace-write。运行时使用 AgentHub 隔离配置，不读取本机 ~/.codex。
+                          Review 模式下以只读沙箱运行；Auto 模式下允许 workspace-write。运行时使用 AChat 隔离配置，不读取本机 ~/.codex。
                         </>
                       )}
                     </div>

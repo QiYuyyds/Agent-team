@@ -140,7 +140,7 @@ export function AgentCreateWizard({
               </div>
             ) : (
               <div className="mt-2 text-[11px] text-muted-foreground">
-                SDK adapter 使用运行时内置工具集，不保存 AgentHub 自定义 toolNames。
+                SDK adapter 使用运行时内置工具集，不保存 AChat 自定义 toolNames。
               </div>
             )}
           </section>

@@ -4,7 +4,7 @@ import { Archive, ArchiveRestore, BarChart3, BookOpen, Bot, ChevronDown, Chevron
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { AgentLibrary } from '@/components/agent-library'
-import { AgentAvatar } from '@/components/agent-avatar'
+import { ConversationAvatar } from '@/components/agent-avatar'
 import { GlobalSearchTrigger } from '@/components/global-search-trigger'
 import { ArtifactLibrary } from '@/components/artifact-library'
 import { KnowledgeLibrary } from '@/components/knowledge-library'
@@ -13,7 +13,6 @@ import { NewConversationDialog } from '@/components/new-conversation-dialog'
 import { SettingsButton } from '@/components/settings-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { UsageDashboard } from '@/components/usage-dashboard'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -188,14 +187,13 @@ export function Sidebar() {
           </div>
         </nav>
 
-        {/* 上下文栏：AgentHub 标题 + 按 mode 分发的内容 */}
+        {/* 上下文栏：AChat 标题 + 按 mode 分发的内容 */}
         {!collapsed && (
           <div className="flex w-60 shrink-0 flex-col overflow-hidden">
-            {/* AgentHub 标题（内容保持不变，仅所在栏变窄） */}
+            {/* AChat 标题（内容保持不变，仅所在栏变窄） */}
             <div className="flex shrink-0 items-center border-b px-4 py-3">
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold">AgentHub</h1>
-                <p className="truncate text-xs text-muted-foreground">多 Agent 协作平台</p>
+                <h1 className="truncate text-base font-semibold">AChat</h1>
               </div>
             </div>
 
@@ -249,12 +247,12 @@ export function Sidebar() {
                       </div>
                     ) : (
                       filteredConversations.map((c) => {
-                        const firstAgent = c.agentIds[0] ? agents[c.agentIds[0]] : null
+                        const convAgents = c.agentIds.map((id) => agents[id]).filter(Boolean)
                         return (
                           <ConversationItem
                             key={c.id}
                             conversation={c}
-                            firstAgent={firstAgent}
+                            agents={convAgents}
                             isActive={activeId === c.id}
                             isRenaming={renamingId === c.id}
                             onActivate={() => setActive(c.id)}
@@ -289,12 +287,12 @@ export function Sidebar() {
                       {showArchived && (
                         <div className="mt-1 space-y-1">
                           {archivedConversations.map((c) => {
-                            const firstAgent = c.agentIds[0] ? agents[c.agentIds[0]] : null
+                            const convAgents = c.agentIds.map((id) => agents[id]).filter(Boolean)
                             return (
                               <ConversationItem
                                 key={c.id}
                                 conversation={c}
-                                firstAgent={firstAgent}
+                                agents={convAgents}
                                 isActive={activeId === c.id}
                                 isRenaming={renamingId === c.id}
                                 isArchived
@@ -359,7 +357,7 @@ export function Sidebar() {
 
 function ConversationItem({
   conversation,
-  firstAgent,
+  agents,
   isActive,
   isRenaming,
   isArchived = false,
@@ -371,7 +369,7 @@ function ConversationItem({
   onRequestDelete,
 }: {
   conversation: ConversationRow
-  firstAgent: AgentRow | null
+  agents: AgentRow[]
   isActive: boolean
   isRenaming: boolean
   isArchived?: boolean
@@ -399,13 +397,11 @@ function ConversationItem({
         disabled={isRenaming}
       >
         <div className="relative">
-          {firstAgent ? (
-            <AgentAvatar agent={firstAgent} size="lg" />
-          ) : (
-            <Avatar className="size-9 shrink-0">
-              <AvatarFallback className="text-sm">?</AvatarFallback>
-            </Avatar>
-          )}
+          <ConversationAvatar
+            agents={agents}
+            isGroup={conversation.mode === 'group'}
+            size="lg"
+          />
           {unread > 0 && !isActive && (
             <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium leading-none text-white">
               {unread > 99 ? '99+' : unread}
