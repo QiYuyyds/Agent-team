@@ -78,6 +78,9 @@ export const toolRegistry = buildRegistry()
 | `report_task_result` | 子任务上报最终语义结果 | 无（输出端工具） | Orchestrator 派发的子 agent（AgentRunner 自动注入） |
 | `fs_read` | 读 workspace 内文本文件 | 读文件系统 | 需要看用户项目代码的 agent |
 | `fs_write` | 写 workspace 内文本文件 | 写文件系统 | 需要生成 / 修改文件的 agent |
+| `fs_edit` | 精确局部替换 workspace 内文本文件 | 写文件系统（复用 pending_writes review 流程） | 需要精确编辑代码的 agent（`local-code` 预设强制装备） |
+| `fs_grep` | 正则搜索 workspace 内文件内容 | 读文件系统 | 需要搜索代码符号 / 文本的 agent（`local-code` 预设强制装备） |
+| `fs_glob` | 递归 glob 匹配 workspace 内文件 | 读文件系统 | 需要按模式查找文件的 agent（`local-code` 预设强制装备） |
 | `bash` | 在 workspace 内跑 shell 命令 | 进程 / 文件系统 | 需要 git / 编译 / 测试的 agent |
 | `web_search` | 用 Tavily 搜公网 | 调外部 API（`api.tavily.com`，耗 Tavily 额度） | 需要实时联网信息的 custom agent（**opt-in，不自动注入**） |
 | `load_skill` | 按需读回装备 skill 的 `SKILL.md` 正文（渐进式披露） | 读 `<data_dir>/skills/` | custom agent 装备 ≥1 skill 时由 `agent_runner` **自动注入**（详见 openspec/changes/add-agent-skills） |
@@ -339,6 +342,69 @@ write_artifact({
 - pending 队列**纯内存**，dev server 重启即丢失。前端 `PendingWriteApprovalDialog` mount 时 `GET /api/conversations/[id]/pending-writes` 拉一次兜底（处理刷新场景）
 
 切换模式：`PATCH /api/conversations/[id]` body `{ fsWriteApprovalMode: 'auto' | 'review' }`。Chat panel header 有 Shield/Zap 图标 toggle 按钮。
+
+### fs_edit
+
+源文件：`backend/app/tools/fs_edit.py`
+
+精确局部替换 workspace 内文本文件的唯一文本片段。与 Claude Code 的 `Edit` 工具对齐。
+
+**参数**：`{ path: string, old_string: string, new_string: string }`。路径同 `fs_read` / `fs_write` 沙箱规则。
+
+**唯一性校验**：handler 用 `str.count(old_string)` 检查出现次数：
+- **0 匹配**：返回 `err("old_string not found in file")`，不修改文件
+- **>1 匹配**：返回 `err("old_string matches N locations; provide more context to make the match unique")`，不修改文件
+- **=1 匹配**：执行 `old_content.replace(old_string, new_string)` 得到 `new_content`
+
+**审批模式**：复用 `fs_write` 完全相同的 review 分支：
+- `'auto'` 模式：直接 `write_file_in_workspace`，返回 `applied: 'auto'`
+- `'review'` 模式：`pending_writes.register(old_content, new_content)` + `await_pending_decision`。前端 `react-diff-viewer` 自动算行级 diff——`fs_write` 全量重写时 diff 满屏红绿，`fs_edit` 局部替换时 diff 只高亮真正改的几行。同一个审批组件，体验天差地别，但前端零改动
+
+**大文件保护**：文件 > 1 MB（`MAX_READ_BYTES`）时返回 `err("file too large for edit (max 1 MB); use fs_write for full rewrite")`，引导 LLM 回退到 `fs_write`。
+
+**返回**：`{ path, absolutePath, bytes, applied: 'auto' | 'review' }`
+
+**与 Claude Code 对照**：对应 Claude Code 的 `Edit` 工具（唯一性校验策略相同）。Claude Code 另有 `MultiEdit` 工具用于批量多文件编辑，本变更不实现；后续可按相同模式新增 `fs_multiedit`。
+
+### fs_grep
+
+源文件：`backend/app/tools/fs_grep.py`
+
+用正则在 workspace 文件中搜索文本，返回结构化匹配结果。与 Claude Code 的 `Grep` 工具对齐。
+
+**参数**：`{ pattern: string, path?: string, glob?: string, max_results?: int }`。`pattern` 是 Python `re` 正则；`path` 限定搜索根目录（默认整个 workspace）；`glob` 限定文件名过滤（如 `*.py`）；`max_results` 默认 100。
+
+**实现**：`re.compile(pattern)` + `pathlib.Path.rglob()` 逐文件逐行扫描，纯 Python stdlib，无 `ripgrep` 二进制依赖。
+
+**限制与保护**：
+- **二进制文件跳过**：读前 8192 字节检测 `\x00` null byte，有则跳过
+- **依赖目录跳过**：`node_modules` / `.git` / `.venv` / `__pycache__` / `.next` / `dist` / `build` 不递归
+- **单文件命中上限**：50 条（避免一个文件灌爆 context）
+- **总结果上限**：默认 100（`max_results` 可调，最大 1000）
+- **10s 超时**：超时后返回已找到的部分结果，`truncated=true` + `timeout=true`
+
+**返回**：`{ matches: [{ file, line_number, line, match }], total_matches, truncated, timeout? }`
+
+**与 Claude Code 对照**：对应 Claude Code 的 `Grep` 工具。Claude Code 底层用 `ripgrep`，本工具用 Python stdlib（`re` + `pathlib`），workspace 场景性能可接受；后续性能不达标可加 `rg` 检测 + 回退。
+
+### fs_glob
+
+源文件：`backend/app/tools/fs_glob.py`
+
+用 glob 模式递归查找 workspace 内文件。与 Claude Code 的 `Glob` 工具对齐。
+
+**参数**：`{ pattern: string, path?: string }`。`pattern` 支持 `**/*.ext` 递归匹配（如 `**/*.tsx`）；`path` 限定搜索根目录（默认整个 workspace）。
+
+**实现**：`pathlib.Path.glob(pattern)` 原生支持 `**/*.ext`，跨平台无坑。
+
+**限制与保护**：
+- **结果上限**：200 条（保护 agent context）
+- **符号链接循环防护**：realpath deduplication 策略（复用 `_scan_workspace_usage` 的 `visited` 集合思路），避免循环 symlink 导致死循环
+- **沙箱约束**：`path` 参数过 `assert_path_within_workspace`，路径逃逸统一拒绝
+
+**返回**：`{ files: [{ path, is_directory, size }], truncated }`。`path` 为相对于 workspace cwd 的相对路径。
+
+**与 Claude Code 对照**：对应 Claude Code 的 `Glob` 工具。命名与语义完全对齐，LLM 迁移成本低。
 
 ### bash
 
