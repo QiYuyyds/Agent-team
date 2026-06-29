@@ -28,6 +28,9 @@ export const AVAILABLE_AGENT_TOOLS = [
   'fs_list',
   'fs_read',
   'fs_write',
+  'fs_edit',
+  'fs_grep',
+  'fs_glob',
   'bash',
   'web_search',
 ] as const
@@ -56,7 +59,7 @@ export const AGENT_TOOL_PRESETS: readonly AgentToolPreset[] = [
     id: 'local-code',
     label: '本地代码',
     desc: '读写 workspace 并运行命令',
-    tools: ['deploy_workspace', 'read_artifact', 'read_attachment', 'ask_user', 'fs_list', 'fs_read', 'fs_write', 'bash'],
+    tools: ['deploy_workspace', 'read_artifact', 'read_attachment', 'ask_user', 'fs_list', 'fs_read', 'fs_write', 'fs_edit', 'fs_grep', 'fs_glob', 'bash'],
   },
   {
     id: 'artifact',
@@ -85,6 +88,9 @@ export const AGENT_TOOL_META: Record<AgentToolName, { label: string; desc: strin
   fs_list: { label: '列出文件', desc: '列出工作区内的目录和文件，用于安全探索项目结构' },
   fs_read: { label: '读取文件', desc: '读取工作区内的文件（源码 / 配置等），仅限沙箱目录' },
   fs_write: { label: '写入文件', desc: '在工作区内新建 / 修改文件；review 模式下需用户批准' },
+  fs_edit: { label: '编辑文件', desc: '精确替换文件中的唯一文本片段；review 模式下 diff 只高亮改的行' },
+  fs_grep: { label: '搜索文本', desc: '用正则在 workspace 文件中搜索，返回结构化匹配结果；跳过二进制和依赖目录' },
+  fs_glob: { label: '查找文件', desc: '用 glob 模式递归查找文件（如 **/*.tsx），返回路径和大小' },
   bash: { label: '执行命令', desc: '在工作区内运行命令行；受命令黑名单与沙箱目录约束' },
   web_search: { label: '联网搜索', desc: '用 Tavily 搜索公网获取实时信息；调用会消耗 Tavily 额度' },
 }

@@ -22,6 +22,9 @@ from app.tools.deploy_workspace import (
     deploy_workspace_for_conversation,
     deploy_workspace_tool,
 )
+from app.tools.fs_edit import fs_edit_tool
+from app.tools.fs_glob import fs_glob_tool
+from app.tools.fs_grep import fs_grep_tool
 from app.tools.fs_list import fs_list_tool
 from app.tools.fs_read import fs_read_tool
 from app.tools.fs_write import fs_write_tool
@@ -84,6 +87,9 @@ def _build_registry() -> ToolRegistry:
     reg.register(fs_list_tool)
     reg.register(fs_read_tool)
     reg.register(fs_write_tool)
+    reg.register(fs_edit_tool)
+    reg.register(fs_grep_tool)
+    reg.register(fs_glob_tool)
     reg.register(bash_tool)
     reg.register(ask_user_tool)
     reg.register(rag_search_tool)
