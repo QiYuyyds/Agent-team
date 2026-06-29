@@ -90,6 +90,7 @@ async def delete_conversation(conversation_id: str) -> JSONResponse:
 async def update_conversation(conversation_id: str, req: Request) -> JSONResponse:
     raw = await _read_json(req)
     title = raw.get("title") if isinstance(raw, dict) else None
+    summary = raw.get("summary") if isinstance(raw, dict) else None
     add_agent_ids = raw.get("addAgentIds") if isinstance(raw, dict) else None
     fs_mode = raw.get("fsWriteApprovalMode") if isinstance(raw, dict) else None
     toggle_pin = raw.get("togglePin") if isinstance(raw, dict) else None
@@ -100,6 +101,7 @@ async def update_conversation(conversation_id: str, req: Request) -> JSONRespons
         not isinstance(raw, dict)
         or (
             title is None
+            and summary is None
             and add_agent_ids is None
             and fs_mode is None
             and toggle_pin is None
@@ -113,7 +115,7 @@ async def update_conversation(conversation_id: str, req: Request) -> JSONRespons
                 "issues": [
                     {
                         "message": (
-                            "At least one of addAgentIds / title / "
+                            "At least one of addAgentIds / title / summary / "
                             "fsWriteApprovalMode / togglePin / toggleArchive "
                             "is required"
                         )
@@ -125,6 +127,10 @@ async def update_conversation(conversation_id: str, req: Request) -> JSONRespons
     # Validate field shapes (mirror zod constraints).
     if title is not None and (
         not isinstance(title, str) or not (1 <= len(title) <= 100)
+    ):
+        return _err("Invalid body", 400)
+    if summary is not None and (
+        not isinstance(summary, str) or len(summary) > 100
     ):
         return _err("Invalid body", 400)
     if add_agent_ids is not None and (
@@ -143,6 +149,10 @@ async def update_conversation(conversation_id: str, req: Request) -> JSONRespons
         if title is not None:
             conversation = await conversation_service.rename_conversation(
                 conversation_id, title
+            )
+        if summary is not None:
+            conversation = await conversation_service.update_conversation_summary(
+                conversation_id, summary
             )
         if add_agent_ids is not None:
             conversation = await conversation_service.add_agents_to_conversation(

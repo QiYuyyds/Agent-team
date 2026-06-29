@@ -136,9 +136,11 @@ export function ChatPanel() {
                 </span>
               )}
             </div>
-            <div className="truncate text-xs text-muted-foreground">
-              {conv.mode === 'single' ? '单聊' : '群聊'} · {participantAgents.length} 位 Agent
-            </div>
+            {conv.summary && (
+              <div className="truncate text-xs text-muted-foreground">
+                {conv.summary}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex min-w-0 max-w-[65%] shrink-0 items-center gap-1 overflow-x-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

@@ -21,6 +21,7 @@ class UpdateConversationRequest(BaseModel):
     """Request to update a conversation."""
 
     title: str | None = None
+    summary: str | None = None
     add_agent_ids: list[str] | None = Field(default=None, alias="addAgentIds")
     fs_write_approval_mode: Literal["auto", "review"] | None = Field(
         default=None, alias="fsWriteApprovalMode"
@@ -44,6 +45,7 @@ class ConversationResponse(BaseModel):
     pinned_at: int | None = Field(alias="pinnedAt")
     fs_write_approval_mode: Literal["auto", "review"] = Field(alias="fsWriteApprovalMode")
     rag_enabled: bool = Field(alias="ragEnabled")
+    summary: str | None = None
     created_at: int = Field(alias="createdAt")
     updated_at: int = Field(alias="updatedAt")
     workspace_mode: Literal["sandbox", "local"] = Field(alias="workspaceMode")

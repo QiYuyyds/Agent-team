@@ -182,6 +182,8 @@ class Conversation(Base):
         Boolean, name="rag_enabled", nullable=False, default=False
     )
 
+    summary: Mapped[str | None] = mapped_column(Text, name="summary", nullable=True)
+
     created_at: Mapped[int] = mapped_column(BigInteger, name="created_at", nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, name="updated_at", nullable=False)
 
