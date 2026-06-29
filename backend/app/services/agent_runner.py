@@ -121,6 +121,60 @@ async def _post_run_memory_hook(
         logger.warning("_post_run_memory_hook error: %s", e)
 
 
+async def _maybe_generate_summary_hook(
+    conversation_id: str,
+    agent_id: str,
+    user_message: str,
+    result: RunExecutionResult,
+) -> None:
+    """Background hook: generate conversation summary after first successful reply.
+
+    Extracts the first agent reply text and calls maybe_generate_summary.
+    Fails silently — summary generation is best-effort.
+    """
+    if not result.output_message_ids:
+        logger.info("[summary_hook] Skipped: no output_message_ids")
+        return
+    try:
+        from app.services.conversation_service import maybe_generate_summary
+
+        async with get_db() as db:
+            first_msg = (
+                await db.execute(
+                    select(Message).where(Message.id == result.output_message_ids[0])
+                )
+            ).scalar_one_or_none()
+            if first_msg is None:
+                logger.warning(
+                    "[summary_hook] Message not found in DB: id=%s",
+                    result.output_message_ids[0],
+                )
+                return
+            text_parts = [
+                p.get("content", "")
+                for p in first_msg.parts_list
+                if p.get("type") == "text"
+            ]
+            agent_reply = "\n".join(text_parts)
+            if not agent_reply.strip():
+                logger.info("[summary_hook] Skipped: empty agent_reply")
+                return
+
+        logger.info(
+            "[summary_hook] Calling maybe_generate_summary for conv=%s agent=%s",
+            conversation_id,
+            agent_id,
+        )
+        await maybe_generate_summary(
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+            user_message=user_message,
+            agent_reply=agent_reply,
+        )
+    except Exception as e:
+        logger.warning("_maybe_generate_summary_hook error: %s", e)
+
+
 # ─── Args / results (mirror the TS interfaces) ───────────────────────────────
 @dataclass
 class RunArgs:
@@ -429,6 +483,12 @@ async def execute_run(
         # ─── Post-run memory hook (Task 5.4) ───
         asyncio.create_task(
             _post_run_memory_hook(prompt, result, args.conversation_id)
+        )
+        # ─── Summary generation hook (first reply only) ───
+        asyncio.create_task(
+            _maybe_generate_summary_hook(
+                args.conversation_id, args.agent_id, prompt, result
+            )
         )
         return final_result
     except asyncio.CancelledError:

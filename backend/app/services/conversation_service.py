@@ -42,7 +42,7 @@ from app.db.models import (
     Message,
     Workspace,
 )
-from app.schemas.events import MessageAddedEvent, MessageRecord, MessageRemovedEvent
+from app.schemas.events import MessageAddedEvent, MessageRecord, MessageRemovedEvent, SummaryUpdatedEvent
 from app.schemas.requests import ConversationResponse
 from app.services import deploy_command_service
 from app.services.deploy_command_service import DeployCommandResult
@@ -124,6 +124,7 @@ def _conversation_response(
         pinned_at=conv.pinned_at,
         fs_write_approval_mode=conv.fs_write_approval_mode,
         rag_enabled=conv.rag_enabled,
+        summary=conv.summary,
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         workspace_mode=ws_mode,
@@ -162,8 +163,125 @@ async def _ws_meta(db, conversation_id: str) -> tuple[str, str | None]:
 
 def _default_title_for(names: list[str]) -> str:
     if len(names) == 1:
-        return f"与 {names[0]} 的对话"
-    return " / ".join(names)
+        return names[0]
+    return f"群聊（{len(names)}）"
+
+
+async def maybe_generate_summary(
+    conversation_id: str,
+    agent_id: str,
+    user_message: str,
+    agent_reply: str,
+) -> None:
+    """Generate a one-line summary (≤50 chars) after the first successful agent reply.
+
+    Only runs when conversation.summary IS NULL (first reply only).
+    Uses the agent's own model for generation via OpenAI-compatible chat completions.
+    Fails silently — summary generation is best-effort and must not block the conversation.
+    """
+    from openai import AsyncOpenAI
+
+    from app.adapters.custom_provider_client import resolve_custom_provider_client_config
+
+    # Step 1: Quick check — is summary already set? Does the agent have a model?
+    async with get_db() as db:
+        conv = await db.get(Conversation, conversation_id)
+        if conv is None or conv.summary is not None:
+            logger.info(
+                "[maybe_generate_summary] Skipped: conv=%s summary_already_set=%s",
+                conversation_id,
+                conv.summary if conv else "N/A",
+            )
+            return
+
+        agent = await db.get(Agent, agent_id)
+        if agent is None:
+            logger.info("[maybe_generate_summary] Skipped: agent not found")
+            return
+        if not agent.model_provider or not agent.model_id:
+            logger.info(
+                "[maybe_generate_summary] Skipped: agent missing model config provider=%s model=%s",
+                agent.model_provider,
+                agent.model_id,
+            )
+            return
+
+        agent_name = agent.name
+        model_provider = agent.model_provider
+        model_id = agent.model_id
+        api_key = agent.api_key
+        api_base_url = agent.api_base_url
+
+    logger.info(
+        "[maybe_generate_summary] Calling LLM provider=%s model=%s",
+        model_provider,
+        model_id,
+    )
+
+    # Step 2: Build the summary prompt and call the LLM (outside DB session)
+    user_snippet = user_message.strip()[:500]
+    reply_snippet = agent_reply.strip()[:500]
+
+    prompt = (
+        "请用一句话（不超过 50 字）总结以下对话的核心话题和结论：\n\n"
+        f"用户：{user_snippet}\n"
+        f"{agent_name}：{reply_snippet}\n\n"
+        "只输出摘要内容，不要加任何前缀或引号。"
+    )
+
+    try:
+        config = resolve_custom_provider_client_config(
+            model_provider,
+            override_key=api_key,
+            api_base_url=api_base_url,
+        )
+        client = AsyncOpenAI(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            max_retries=1,
+        )
+        response = await client.chat.completions.create(
+            model=model_id,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100,
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content
+        summary = raw.strip()[:100] if raw else ""
+        if not summary:
+            logger.info("[maybe_generate_summary] LLM returned empty content")
+    except Exception:
+        logger.warning(
+            "[maybe_generate_summary] Failed to generate summary for conversation %s",
+            conversation_id,
+            exc_info=True,
+        )
+        return
+
+    if not summary:
+        return
+
+    # Step 3: Write with double-check for concurrency safety
+    async with get_db() as db:
+        conv = await db.get(Conversation, conversation_id)
+        if conv is None or conv.summary is not None:
+            return  # Another concurrent call already wrote it
+        conv.summary = summary
+        conv.updated_at = now_ms()
+
+    # Step 4: Publish SSE event so the frontend updates in real time
+    event_bus.publish(
+        SummaryUpdatedEvent(
+            conversation_id=conversation_id,
+            timestamp=now_ms(),
+            summary=summary,
+        )
+    )
+    logger.info(
+        "[maybe_generate_summary] Success! conv=%s summary=%s",
+        conversation_id,
+        summary,
+    )
 
 
 # ─── Create ─────────────────────────────────────────────────────────────────
@@ -264,6 +382,7 @@ async def create_conversation(
         pinned_at=None,
         fs_write_approval_mode="review",
         rag_enabled=False,
+        summary=None,
         created_at=now,
         updated_at=now,
         workspace_mode=workspace_mode,
@@ -335,6 +454,25 @@ async def rename_conversation(conversation_id: str, title: str) -> ConversationR
     async with get_db() as db:
         conv = await _require_conversation(db, conversation_id)
         conv.title = trimmed
+        conv.updated_at = now_ms()
+        mode, bound_path = await _ws_meta(db, conversation_id)
+        return _conversation_response(conv, mode, bound_path)
+
+
+async def update_conversation_summary(
+    conversation_id: str, summary: str | None
+) -> ConversationResponse:
+    """Update the conversation summary (set or clear)."""
+    if summary is not None:
+        trimmed = summary.strip()
+        if len(trimmed) > 100:
+            raise ValueError("Summary too long (max 100)")
+    else:
+        trimmed = None
+
+    async with get_db() as db:
+        conv = await _require_conversation(db, conversation_id)
+        conv.summary = trimmed
         conv.updated_at = now_ms()
         mode, bound_path = await _ws_meta(db, conversation_id)
         return _conversation_response(conv, mode, bound_path)

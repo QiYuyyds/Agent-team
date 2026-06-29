@@ -81,6 +81,9 @@ export const conversations = sqliteTable(
     /** RAG 知识库检索开关：启用后 Agent 可调用 rag_search/rag_ingest 等工具 */
     ragEnabled: integer('rag_enabled', { mode: 'boolean' }).notNull().default(false),
 
+    /** 对话摘要（≤50字），首次对话后自动生成；NULL 表示尚未生成 */
+    summary: text('summary'),
+
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

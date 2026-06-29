@@ -426,6 +426,7 @@ export type StreamEvent = BaseEvent &
     | { type: 'bash_command.resolved'; pendingId: string; approved: boolean }
     | { type: 'ask_user.pending'; pendingQuestion: PendingQuestion }
     | { type: 'ask_user.resolved'; pendingId: string; answered: boolean }
+    | { type: 'summary.updated'; summary: string | null }
     | { type: 'heartbeat' }
   )
 

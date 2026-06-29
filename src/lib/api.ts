@@ -186,6 +186,20 @@ export async function renameConversation(
   return conversation
 }
 
+export async function updateConversationSummary(
+  conversationId: string,
+  summary: string | null,
+): Promise<ConversationWithMeta> {
+  const { conversation } = await json<{ conversation: ConversationWithMeta }>(
+    fetch(`${API_BASE_URL}/api/conversations/${conversationId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary }),
+    }),
+  )
+  return conversation
+}
+
 export async function togglePinConversation(conversationId: string): Promise<ConversationWithMeta> {
   const { conversation } = await json<{ conversation: ConversationWithMeta }>(
     fetch(`${API_BASE_URL}/api/conversations/${conversationId}`, {

@@ -1,6 +1,6 @@
 'use client'
 
-import { Archive, ArchiveRestore, BarChart3, BookOpen, Bot, ChevronDown, ChevronRight, Layers, MessageSquare, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, BarChart3, BookOpen, Bot, ChevronDown, ChevronRight, Ellipsis, Layers, MessageSquare, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { AgentLibrary } from '@/components/agent-library'
@@ -14,6 +14,13 @@ import { SettingsButton } from '@/components/settings-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { UsageDashboard } from '@/components/usage-dashboard'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Dialog,
   DialogContent,
@@ -30,6 +37,7 @@ import {
   renameConversation as renameConversationAPI,
   toggleArchiveConversation as toggleArchiveConversationAPI,
   togglePinConversation as togglePinConversationAPI,
+  updateConversationSummary,
 } from '@/lib/api'
 import { subscribeUiCommand } from '@/lib/ui-command-events'
 import { cn } from '@/lib/utils'
@@ -56,6 +64,7 @@ export function Sidebar() {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [editingSummaryId, setEditingSummaryId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [showArchived, setShowArchived] = useState(false)
 
@@ -71,7 +80,11 @@ export function Sidebar() {
   const filteredConversations = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return activeConversations
-    return activeConversations.filter((c) => c.title.toLowerCase().includes(q))
+    return activeConversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        (c.summary && c.summary.toLowerCase().includes(q)),
+    )
   }, [activeConversations, search])
 
   const handleTogglePin = async (convId: string) => {
@@ -101,6 +114,17 @@ export function Sidebar() {
       upsertConversation(updated)
     } catch (err) {
       console.error('[Sidebar] rename failed', err)
+    }
+  }
+
+  const finishSummaryEdit = async (convId: string, next: string) => {
+    const trimmed = next.trim() || null
+    setEditingSummaryId(null)
+    try {
+      const updated = await updateConversationSummary(convId, trimmed)
+      upsertConversation(updated)
+    } catch (err) {
+      console.error('[Sidebar] summary edit failed', err)
     }
   }
 
@@ -255,11 +279,14 @@ export function Sidebar() {
                             agents={convAgents}
                             isActive={activeId === c.id}
                             isRenaming={renamingId === c.id}
+                            isEditingSummary={editingSummaryId === c.id}
                             onActivate={() => setActive(c.id)}
                             onTogglePin={() => void handleTogglePin(c.id)}
                             onToggleArchive={() => void handleToggleArchive(c.id)}
                             onStartRename={() => setRenamingId(c.id)}
                             onFinishRename={(next) => void finishRename(c.id, c.title, next)}
+                            onStartEditSummary={() => setEditingSummaryId(c.id)}
+                            onFinishEditSummary={(next) => void finishSummaryEdit(c.id, next)}
                             onRequestDelete={() => setDeleteTargetId(c.id)}
                           />
                         )
@@ -296,11 +323,14 @@ export function Sidebar() {
                                 isActive={activeId === c.id}
                                 isRenaming={renamingId === c.id}
                                 isArchived
+                                isEditingSummary={editingSummaryId === c.id}
                                 onActivate={() => setActive(c.id)}
                                 onTogglePin={() => void handleTogglePin(c.id)}
                                 onToggleArchive={() => void handleToggleArchive(c.id)}
                                 onStartRename={() => setRenamingId(c.id)}
                                 onFinishRename={(next) => void finishRename(c.id, c.title, next)}
+                                onStartEditSummary={() => setEditingSummaryId(c.id)}
+                                onFinishEditSummary={(next) => void finishSummaryEdit(c.id, next)}
                                 onRequestDelete={() => setDeleteTargetId(c.id)}
                               />
                             )
@@ -361,11 +391,14 @@ function ConversationItem({
   isActive,
   isRenaming,
   isArchived = false,
+  isEditingSummary = false,
   onActivate,
   onTogglePin,
   onToggleArchive,
   onStartRename,
   onFinishRename,
+  onStartEditSummary,
+  onFinishEditSummary,
   onRequestDelete,
 }: {
   conversation: ConversationRow
@@ -373,11 +406,14 @@ function ConversationItem({
   isActive: boolean
   isRenaming: boolean
   isArchived?: boolean
+  isEditingSummary?: boolean
   onActivate: () => void
   onTogglePin: () => void
   onToggleArchive: () => void
   onStartRename: () => void
   onFinishRename: (next: string) => void | Promise<void>
+  onStartEditSummary: () => void
+  onFinishEditSummary: (next: string) => void | Promise<void>
   onRequestDelete: () => void
 }) {
   const isPinned = !!conversation.pinnedAt
@@ -422,61 +458,109 @@ function ConversationItem({
               <div className="truncate text-sm font-medium">{conversation.title}</div>
             </div>
           )}
-          <div className="truncate text-xs text-muted-foreground">
-            {conversation.mode === 'single' ? '单聊' : '群聊'} · {conversation.agentIds.length} 位 Agent
-          </div>
+          {isEditingSummary ? (
+            <RenameInput
+              key={`summary-${conversation.id}`}
+              initial={conversation.summary ?? ''}
+              onCommit={(next) => onFinishEditSummary(next)}
+              onCancel={() => onFinishEditSummary(conversation.summary ?? '')}
+            />
+          ) : conversation.summary ? (
+            <div className="group/summary flex items-center gap-1">
+              <div className="line-clamp-2 text-xs leading-tight text-muted-foreground">
+                {conversation.summary}
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onStartEditSummary()
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onStartEditSummary()
+                  }
+                }}
+                title="编辑摘要"
+                className="shrink-0 cursor-pointer rounded p-0.5 opacity-0 transition group-hover/summary:opacity-100 hover:bg-accent hover:text-foreground"
+              >
+                <Pencil className="size-3" />
+              </span>
+            </div>
+          ) : null}
         </div>
       </button>
-      {!isRenaming && (
-        <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onTogglePin()
-            }}
-            title={isPinned ? '取消置顶' : '置顶'}
-            className={cn(
-              'transition-colors',
-              isPinned ? 'text-warning hover:text-warning/80' : 'hover:text-warning',
-            )}
+      {!isRenaming && !isEditingSummary && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            onClick={(e) => e.stopPropagation()}
+            title="更多操作"
+            className="shrink-0 cursor-pointer rounded p-0.5 opacity-0 transition group-hover:opacity-100 hover:bg-accent hover:text-foreground"
           >
-            {isPinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleArchive()
-            }}
-            title={isArchived ? '取消归档' : '归档'}
-            className="transition-colors hover:text-sky-500"
-          >
-            {isArchived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onStartRename()
-            }}
-            title="重命名"
-            className="transition-colors hover:text-primary"
-          >
-            <Pencil className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onRequestDelete()
-            }}
-            title="删除会话"
-            className="transition-colors hover:text-destructive"
-          >
-            <Trash2 className="size-4" />
-          </button>
-        </div>
+            <Ellipsis className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-36">
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onTogglePin()
+              }}
+            >
+              {isPinned ? (
+                <>
+                  <PinOff className="size-4" />
+                  <span>取消置顶</span>
+                </>
+              ) : (
+                <>
+                  <Pin className="size-4" />
+                  <span>置顶</span>
+                </>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleArchive()
+              }}
+            >
+              {isArchived ? (
+                <>
+                  <ArchiveRestore className="size-4" />
+                  <span>取消归档</span>
+                </>
+              ) : (
+                <>
+                  <Archive className="size-4" />
+                  <span>归档</span>
+                </>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onStartRename()
+              }}
+            >
+              <Pencil className="size-4" />
+              <span>重命名</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={(e) => {
+                e.stopPropagation()
+                onRequestDelete()
+              }}
+            >
+              <Trash2 className="size-4" />
+              <span>删除会话</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </div>
   )

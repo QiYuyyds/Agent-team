@@ -342,6 +342,14 @@ class HeartbeatEvent(BaseEvent):
     type: Literal["heartbeat"] = "heartbeat"
 
 
+# ─── Summary Updated Event ─────────────────────────────────────
+class SummaryUpdatedEvent(BaseEvent):
+    """Event when a conversation summary is updated."""
+
+    type: Literal["summary.updated"] = "summary.updated"
+    summary: str | None = None
+
+
 # ─── Union Type ─────────────────────────────────────
 StreamEvent = Annotated[
     Union[  # noqa: UP007 - keep Union[] for the Pydantic discriminated union
@@ -382,6 +390,8 @@ StreamEvent = Annotated[
         AskUserResolvedEvent,
         # Heartbeat
         HeartbeatEvent,
+        # Summary
+        SummaryUpdatedEvent,
     ],
     Field(discriminator="type"),
 ]

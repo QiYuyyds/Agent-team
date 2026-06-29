@@ -852,6 +852,12 @@ export const useAppStore = create<AppState>()(
             return
           }
 
+          case 'summary.updated': {
+            const conv = s.conversations[event.conversationId]
+            if (conv) conv.summary = event.summary
+            return
+          }
+
           default:
             return
         }
