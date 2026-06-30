@@ -88,6 +88,14 @@ async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
         else:
             logger.warning("RAG: generate_fn not available (no LLM API key)")
 
+        # Inject embed_fn and generate_fn into MemoryService for LTM semantic recall
+        if embed_fn and _memory_service:
+            _memory_service.set_embed_fn(embed_fn)
+            logger.info("Memory: embed_fn injected")
+        if generate_fn and _memory_service:
+            _memory_service.set_generate_fn(generate_fn)
+            logger.info("Memory: generate_fn injected")
+
         # Wire KG backend if Neo4j driver and LLM are both available
         if _infrastructure and _infrastructure.neo4j_driver and generate_fn:
             _wire_kg_to_rag(_rag_service, _infrastructure.neo4j_driver, settings, generate_fn)

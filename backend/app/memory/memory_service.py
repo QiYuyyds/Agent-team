@@ -8,9 +8,12 @@ and consolidation triggers.
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, List, Optional
 
 from app.config import Settings
+from app.db.engine import get_db
+from app.db.models import ChatHistory
 from app.memory.consolidation import ConsolidationConfig, Item
 from app.memory.long_term import LongTerm
 from app.memory.preference import Preference
@@ -49,12 +52,19 @@ class MemoryService:
         # Embedding function (injected by infrastructure factory)
         self._embed_fn: Optional[Callable] = None
 
+        # LLM generate function (injected for memory extraction)
+        self._generate_fn: Optional[Callable] = None
+
         self._initialized = False
 
     def set_embed_fn(self, fn: Callable) -> None:
         """Inject embedding function used by LTM for semantic recall."""
         self._embed_fn = fn
         self.ltm.set_embed_fn(fn)
+
+    def set_generate_fn(self, fn: Callable) -> None:
+        """Inject LLM generate function for memory extraction."""
+        self._generate_fn = fn
 
     def set_neo4j_driver(self, driver) -> None:
         """Inject Neo4j AsyncDriver and wire GraphMemory ↔ LTM."""
@@ -96,10 +106,30 @@ class MemoryService:
         """Post-conversation hook — called after each message exchange.
 
         1. Add to short-term memory (both user and assistant turns).
-        2. If user message: extract preferences, add to LTM, check consolidation.
+        2. Persist ChatHistory to PG (both roles).
+        3. If user message: extract preferences, add to LTM, check consolidation.
+        4. If assistant message: trigger LLM-based memory extraction (background).
         """
         # Always add to STM
         self.stm.add(role, content)
+
+        # Persist to chat_history PG (both roles)
+        try:
+            async with get_db() as session:
+                row = ChatHistory(
+                    role=role,
+                    content=content,
+                    created_at=time.time(),
+                )
+                session.add(row)
+        except Exception as e:
+            logger.warning("ChatHistory PG write failed: %s", e)
+
+        if role == "assistant":
+            # Assistant message: trigger LLM-based memory extraction (background)
+            if self._generate_fn and len(content) >= 10 and not self._is_trivial_reply(content):
+                asyncio.create_task(self._safe_extract_memory(content))
+            return
 
         if role != "user":
             return
@@ -183,6 +213,40 @@ class MemoryService:
                 )
         except Exception as e:
             logger.warning("Consolidation failed: %s", e)
+
+    async def _safe_extract_memory(self, content: str) -> None:
+        """Extract memory facts from assistant reply using LLM (background task)."""
+        try:
+            from app.memory.memory_writer import extract_memory_from_reply
+            await extract_memory_from_reply(
+                generate_fn=self._generate_fn,
+                embed_fn=self._embed_fn,
+                ltm=self.ltm,
+                content=content,
+            )
+        except Exception as e:
+            logger.warning("Memory extraction failed: %s", e)
+
+    @staticmethod
+    def _is_trivial_reply(content: str) -> bool:
+        """Check if assistant reply is trivial and should be skipped for extraction."""
+        import re
+        text = content.strip()
+        if len(text) < 10:
+            return True
+        trivial_patterns = [
+            r"^好的[。.！!]?\s*$",
+            r"^没问题[。.！!]?\s*$",
+            r"^OK[。.！!]?\s*$",
+            r"^ok[。.！!]?\s*$",
+            r"^明白[了]?[。.！!]?\s*$",
+            r"^了解[。.！!]?\s*$",
+            r"^收到[。.！!]?\s*$",
+            r"^嗯[嗯]?[。.！!]?\s*$",
+            r"^是的[。.！!]?\s*$",
+            r"^好的.*没问题",
+        ]
+        return any(re.match(p, text) for p in trivial_patterns)
 
     @staticmethod
     def _estimate_importance(content: str) -> float:
