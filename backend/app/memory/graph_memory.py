@@ -105,6 +105,21 @@ class GraphMemory:
             )
         except Exception as e:
             logger.warning("Neo4j upsertMemoryNode failed (id=%s): %s", mem_id, e)
+            return  # Neo4j failed — skip PG mirror too
+
+        # PG mirror write (failure does not affect Neo4j)
+        try:
+            from app.db.engine import get_db
+            from app.db.models import MemoryNode
+            async with get_db() as session:
+                node = MemoryNode(
+                    mem_id=int(mem_id),
+                    content=content,
+                    importance=float(importance),
+                )
+                await session.merge(node)
+        except Exception as e:
+            logger.warning("PG mirror MemoryNode write failed (id=%s): %s", mem_id, e)
 
     async def _add_memory_edge(self, from_id: int, to_id: int, edge_type: str, weight: float) -> None:
         if not self._available():
@@ -124,6 +139,22 @@ class GraphMemory:
             )
         except Exception as e:
             logger.warning("Neo4j addMemoryEdge failed (%s->%s): %s", from_id, to_id, e)
+            return  # Neo4j failed — skip PG mirror too
+
+        # PG mirror write (failure does not affect Neo4j)
+        try:
+            from app.db.engine import get_db
+            from app.db.models import MemoryEdge
+            async with get_db() as session:
+                edge = MemoryEdge(
+                    from_id=int(from_id),
+                    to_id=int(to_id),
+                    rel_type=edge_type,
+                    weight=float(weight),
+                )
+                session.add(edge)
+        except Exception as e:
+            logger.warning("PG mirror MemoryEdge write failed (%s->%s): %s", from_id, to_id, e)
 
     async def _expand_memory_neighbors(self, seed_ids: List[int], hops: int) -> List[int]:
         if not self._available() or not seed_ids:

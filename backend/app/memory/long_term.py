@@ -7,9 +7,9 @@ Ported from AGI-memory ``internal/memory/memory.py`` LongTerm class.
 import asyncio
 import logging
 import time
-from typing import Any, Callable, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, List, Optional, Set, TYPE_CHECKING
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.config import Settings
 from app.db.engine import get_db
@@ -144,6 +144,140 @@ class LongTerm:
             except Exception as e:
                 logger.warning("graph_memory.add_to_graph failed: %s", e)
 
+    async def store_classified(
+        self,
+        content: str,
+        importance: float,
+        emb: Optional[List[float]],
+        category: str,
+        tags: Optional[List[str]],
+        slot_hint: str,
+    ) -> bool:
+        """Schema-driven write with cosine dedup against existing items.
+
+        If embedding cosine similarity >= 0.95 against an existing item,
+        update that item's importance/tags/category/slot_hint (no new row).
+        Otherwise insert a new row via the full add path.
+
+        Returns True if a new item was inserted, False if dedup hit (update only).
+        """
+        tags = list(tags or [])
+        category = category or ""
+        slot_hint = slot_hint or ""
+
+        dedup_threshold = self.cfg.dedup_threshold  # default 0.95
+
+        # Cosine dedup: if highly similar to existing item, update instead of insert
+        if emb and self.items:
+            best_idx = -1
+            best_sim = -1.0
+            for idx, existing in enumerate(self.items):
+                if not existing.embedding or len(existing.embedding) != len(emb):
+                    continue
+                sim = cosine_similarity(emb, existing.embedding)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_idx = idx
+
+            if best_idx >= 0 and best_sim >= dedup_threshold:
+                target = self.items[best_idx]
+                # Update fields on existing item
+                if importance > target.importance:
+                    target.importance = importance
+                if tags:
+                    merged_tags: List[str] = []
+                    seen = set()
+                    for t in list(target.tags) + list(tags):
+                        if not t or t in seen:
+                            continue
+                        seen.add(t)
+                        merged_tags.append(t)
+                    target.tags = merged_tags
+                if category and (target.category == "" or target.category == "general"):
+                    target.category = category
+                if slot_hint and target.slot_hint == "":
+                    target.slot_hint = slot_hint
+                target.last_accessed = time.time()
+
+                # PG UPDATE
+                if target.id is not None:
+                    try:
+                        async with get_db() as session:
+                            stmt = (
+                                update(LongTermMemory)
+                                .where(LongTermMemory.id == target.id)
+                                .values(
+                                    importance=target.importance,
+                                    tags=target.tags,
+                                    category=target.category,
+                                    slot_hint=target.slot_hint,
+                                    last_accessed=target.last_accessed,
+                                )
+                            )
+                            await session.execute(stmt)
+                    except Exception as e:
+                        logger.warning("store_classified PG update failed: %s", e)
+
+                # Sync to graph
+                if self.graph_memory is not None:
+                    try:
+                        await self.graph_memory.update_node(target)
+                    except Exception as e:
+                        logger.warning("store_classified graph update failed: %s", e)
+
+                return False
+
+        # Dedup miss — full insert path
+        now_ts = time.time()
+        new_item = Item(
+            content=content,
+            importance=importance,
+            embedding=list(emb) if emb else None,
+            id=self._next_id,
+            created_at=now_ts,
+            last_accessed=now_ts,
+            category=category if category else "general",
+            tags=tags,
+            slot_hint=slot_hint,
+            score=0.0,
+        )
+        self._next_id += 1
+        prior = list(self.items)
+        self.items.append(new_item)
+        self._items_since_last += 1
+
+        # PG INSERT
+        try:
+            async with get_db() as session:
+                row = LongTermMemory(
+                    content=content,
+                    importance=importance,
+                    embedding=list(emb) if emb else None,
+                    created_at=now_ts,
+                    last_accessed=now_ts,
+                    category=new_item.category,
+                    tags=new_item.tags,
+                    slot_hint=new_item.slot_hint,
+                    score=new_item.score,
+                )
+                session.add(row)
+                await session.flush()
+                if row.id:
+                    new_item.id = row.id
+                    if row.id >= self._next_id:
+                        self._next_id = row.id + 1
+        except Exception as e:
+            logger.warning("store_classified PG save failed: %s", e)
+
+        # Graph sync
+        if self.graph_memory is not None:
+            try:
+                await self.graph_memory.add_to_graph(new_item, neighbors=prior[-50:])
+            except Exception as e:
+                logger.warning("store_classified graph add failed: %s", e)
+
+        return True
+
     # ─── Recall ───────────────────────────────────────────────────────────────
 
     async def recall(self, query: str, top_k: int = 3) -> List[Item]:
@@ -169,7 +303,8 @@ class LongTerm:
                     scored.append((item, score))
 
             scored.sort(key=lambda x: x[1], reverse=True)
-            return [item for item, score in scored[:top_k] if score >= 0.4]
+            seed_items = [item for item, score in scored[:top_k] if score >= 0.4]
+            return await self._graph_expand(seed_items, top_k)
 
     async def recall_by_filter(
         self,
@@ -240,7 +375,69 @@ class LongTerm:
             candidates.sort(key=lambda it: it.score, reverse=True)
             if top_k > 0 and len(candidates) > top_k:
                 candidates = candidates[:top_k]
-            return candidates
+            return await self._graph_expand(candidates, top_k, cat_set)
+
+    # ─── Graph expansion ───────────────────────────────────────────────────
+
+    async def _graph_expand(
+        self,
+        seed_items: List[Item],
+        top_k: int,
+        cat_set: Optional[Set[str]] = None,
+    ) -> List[Item]:
+        """1-hop graph expansion from seed items.
+
+        For each seed item, calls ``graph_memory.find_related(id)`` to discover
+        neighbouring mem_ids.  Expanded items receive a fixed score of 0.45,
+        are merged with the seeds, sorted by score descending, and truncated
+        to *top_k*.
+
+        If *cat_set* is given, expanded items whose category is not in the set
+        are excluded.
+
+        On any failure the method logs a warning and returns only the seeds.
+        """
+        if not self.graph_memory or not seed_items:
+            return seed_items
+
+        seed_id_set = {it.id for it in seed_items if it.id is not None}
+        if not seed_id_set:
+            return seed_items
+
+        try:
+            expanded_ids: Set[int] = set()
+            for sid in seed_id_set:
+                related = await self.graph_memory.find_related(sid)
+                expanded_ids.update(related or [])
+        except Exception as e:
+            logger.warning("graph_memory.find_related failed during recall: %s", e)
+            return seed_items
+
+        extras: List[Item] = []
+        for it in self.items:
+            if it.id is None or it.id not in expanded_ids or it.id in seed_id_set:
+                continue
+            if cat_set is not None and (it.category or "general") not in cat_set:
+                continue
+            extra = Item(
+                content=it.content,
+                importance=it.importance,
+                embedding=list(it.embedding) if it.embedding else None,
+                id=it.id,
+                created_at=it.created_at,
+                last_accessed=it.last_accessed,
+                category=it.category,
+                tags=list(it.tags),
+                slot_hint=it.slot_hint,
+                score=0.45,
+            )
+            extras.append(extra)
+
+        all_items = list(seed_items) + extras
+        all_items.sort(key=lambda x: x.score, reverse=True)
+        if top_k > 0 and len(all_items) > top_k:
+            all_items = all_items[:top_k]
+        return all_items
 
     # ─── Consolidation ────────────────────────────────────────────────────────
 
