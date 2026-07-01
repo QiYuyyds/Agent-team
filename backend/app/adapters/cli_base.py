@@ -475,41 +475,70 @@ class CLIAdapterBase(AgentPlatformAdapter, ABC):
 
         logger.info("[%s] spawning: %s %s", self.name, exec_path, " ".join(args))
 
-        # CREATE_NO_WINDOW (0x08000000) prevents a console window from popping
-        # up on Windows when spawning a CLI subprocess.
-        popen_kwargs = {
-            "stdin": asyncio.subprocess.PIPE,
-            "stdout": asyncio.subprocess.PIPE,
-            "stderr": asyncio.subprocess.PIPE,
-            "cwd": cwd,
-            "env": env,
-            "creationflags": subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        }
+        # On Windows, optionally spawn inside a ConPTY (pseudo-terminal) to
+        # force line-buffered stdout.  ConPTY is currently experimental —
+        # disable by default until the STARTUPINFOEX alignment issue is
+        # resolved (error 87 → ERROR_INVALID_PARAMETER).
+        _use_conpty = False  # experimental: sys.platform == "win32"
+        _conpty_proc = None
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                exec_path, *args, **popen_kwargs
-            )
-        except NotImplementedError:
-            if sys.platform != "win32":
-                raise
-            loop_type = type(asyncio.get_running_loop()).__name__
-            logger.warning(
-                "[%s] asyncio.create_subprocess_exec not supported on this "
-                "event loop (%s); falling back to thread-based Popen wrapper. "
-                "Consider adding asyncio.set_event_loop_policy("
-                "asyncio.WindowsProactorEventLoopPolicy()) at startup.",
-                self.name,
-                loop_type,
-            )
-            # Drop creationflags from kwargs — it's passed positionally
-            proc = await _spawn_subprocess_fallback(
-                exec_path,
-                *args,
-                cwd=cwd,
-                env=env,
-                creationflags=popen_kwargs["creationflags"],
-            )
+        if _use_conpty:
+            from app.adapters.conpty import ConPTYProcess, spawn_conpty
+
+            try:
+                _conpty_proc = await spawn_conpty(
+                    exec_path,
+                    *args,
+                    cwd=cwd,
+                    env=env,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                proc = _conpty_proc  # quacks like asyncio.subprocess.Process
+                logger.info("[%s] spawned via ConPTY (pid=%d)", self.name, proc.pid)
+            except Exception as conpty_err:
+                logger.warning(
+                    "[%s] ConPTY spawn failed (%s); falling back to pipe",
+                    self.name, conpty_err,
+                )
+                _use_conpty = False
+                _conpty_proc = None  # don't try to clean up a failed spawn
+
+        if not _use_conpty:
+            # CREATE_NO_WINDOW (0x08000000) prevents a console window from
+            # popping up on Windows when spawning a CLI subprocess.
+            popen_kwargs = {
+                "stdin": asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": cwd,
+                "env": env,
+                "creationflags": subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            }
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    exec_path, *args, **popen_kwargs
+                )
+            except NotImplementedError:
+                if sys.platform != "win32":
+                    raise
+                loop_type = type(asyncio.get_running_loop()).__name__
+                logger.warning(
+                    "[%s] asyncio.create_subprocess_exec not supported on this "
+                    "event loop (%s); falling back to thread-based Popen wrapper. "
+                    "Consider adding asyncio.set_event_loop_policy("
+                    "asyncio.WindowsProactorEventLoopPolicy()) at startup.",
+                    self.name,
+                    loop_type,
+                )
+                # Drop creationflags from kwargs — it's passed positionally
+                proc = await _spawn_subprocess_fallback(
+                    exec_path,
+                    *args,
+                    cwd=cwd,
+                    env=env,
+                    creationflags=popen_kwargs["creationflags"],
+                )
 
         cli = CLIProcess(proc=proc, cancel_event=cancel_event)
 
@@ -534,6 +563,12 @@ class CLIAdapterBase(AgentPlatformAdapter, ABC):
                 except Exception:
                     pass
             await cli.shutdown()
+            # Release ConPTY handles (pseudo-console, process, attribute list)
+            if _conpty_proc is not None:
+                try:
+                    _conpty_proc.cleanup()
+                except Exception:
+                    pass
 
     # ── helpers subclasses may use ─────────────────────────────
 

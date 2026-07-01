@@ -12,6 +12,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 
 
 def resolve_windows_exe(exec_path: str) -> str:
@@ -72,7 +73,8 @@ async def main():
         "--strict-mcp-config",
         "--permission-mode", "bypassPermissions",
         "--disallowedTools", "AskUserQuestion",
-        "--model", "claude-sonnet-4-5",
+        "--include-partial-messages",
+        "--model", "claude-opus-4-8",
         "--append-system-prompt-file", sp_file,
     ]
     print(f"[3] Args: {' '.join(args)}")
@@ -94,7 +96,7 @@ async def main():
         "type": "user",
         "message": {
             "role": "user",
-            "content": [{"type": "text", "text": "Hello! Just say 'Hello from Claude Code CLI!' and nothing else."}],
+            "content": [{"type": "text", "text": "Write a short paragraph (3-4 sentences) explaining what Python asyncio is and why it's useful."}],
         },
     })
     print(f"[5] Writing prompt: {prompt_payload[:80]}...")
@@ -104,8 +106,10 @@ async def main():
 
     # 6. Read stdout line by line (mirrors claude_adapter._read_events + multica scanner)
     print(f"[6] Reading stdout...")
+    t_spawn = time.monotonic()
     line_count = 0
     stderr_chunks = []
+    first_line_t = None
 
     # Start stderr reader
     async def read_stderr():
@@ -124,11 +128,16 @@ async def main():
         while True:
             line = await asyncio.wait_for(proc.stdout.readline(), timeout=120.0)
             if not line:
-                print(f"    EOF after {line_count} lines")
+                t_total = time.monotonic() - t_spawn
+                print(f"    EOF after {line_count} lines (t={t_total:.3f}s)")
                 break
             decoded = line.decode("utf-8", errors="replace").strip()
             if not decoded:
                 continue
+            t_line = time.monotonic() - t_spawn
+            if first_line_t is None:
+                first_line_t = t_line
+                print(f"    *** FIRST LINE at t={t_line:.3f}s ***")
             line_count += 1
             try:
                 obj = json.loads(decoded)
@@ -151,6 +160,38 @@ async def main():
                     usage = obj.get("usage", {})
                     if usage:
                         summary += f" input_tokens={usage.get('input_tokens')} output_tokens={usage.get('output_tokens')}"
+                elif msg_type == "stream_event":
+                    event = obj.get("event", {})
+                    if event:
+                        # The 'event' field contains the raw streaming event from the API
+                        etype = event.get("type", "?")
+                        if etype == "content_block_delta":
+                            delta = event.get("delta", {})
+                            dtype = delta.get("type", "?")
+                            if dtype == "text_delta":
+                                summary += f" text_delta='{delta.get('text','')[:80]}'"
+                            elif dtype == "thinking_delta":
+                                summary += f" thinking_delta='{delta.get('thinking','')[:80]}'"
+                            else:
+                                summary += f" delta_type={dtype}"
+                        elif etype == "content_block_start":
+                            block = event.get("content_block", {})
+                            summary += f" block_start={block.get('type','?')}"
+                        elif etype == "content_block_stop":
+                            summary += f" block_stop"
+                        elif etype == "message_start":
+                            summary += f" message_start model={event.get('message',{}).get('model','?')}"
+                        elif etype == "message_delta":
+                            delta = event.get("delta", {})
+                            summary += f" stop_reason={delta.get('stop_reason','?')}"
+                        elif etype == "message_stop":
+                            summary += f" message_stop"
+                        elif etype == "ping":
+                            summary += f" ping"
+                        else:
+                            summary += f" event_type={etype}"
+                    else:
+                        summary += f" (no event field) keys={list(obj.keys())}"
                 elif msg_type == "system":
                     summary += f" subtype={obj.get('subtype','?')}"
                 elif msg_type == "user":
@@ -158,7 +199,7 @@ async def main():
                     for block in content:
                         if block.get("type") == "tool_result":
                             summary += f" tool_result call_id={block.get('tool_use_id','?')[:20]}"
-                print(f"    [{line_count}] {summary}")
+                print(f"    [{line_count}] t={t_line:.3f}s {summary}")
             except json.JSONDecodeError:
                 print(f"    [{line_count}] RAW: {decoded[:120]}")
 
@@ -195,7 +236,14 @@ async def main():
 
     # 10. Summary
     print(f"\n{'='*60}")
-    print(f"RESULT: exit_code={exit_code}, lines={line_count}")
+    t_total = time.monotonic() - t_spawn
+    print(f"RESULT: exit_code={exit_code}, lines={line_count}, total_time={t_total:.3f}s")
+    if first_line_t is not None:
+        print(f"TIMING: first_line={first_line_t:.3f}s, total={t_total:.3f}s, gap={t_total - first_line_t:.3f}s")
+        if first_line_t > 5.0:
+            print("WARNING: First line took > 5s — likely stdout buffering in the CLI subprocess!")
+        elif t_total - first_line_t < 0.1 and line_count > 1:
+            print("WARNING: All lines arrived almost simultaneously — confirms buffering issue!")
     if line_count == 0:
         print("ISSUE: No output from Claude Code CLI!")
         print("This confirms the communication problem.")

@@ -15,8 +15,9 @@ import contextlib
 import json
 import logging
 import os
-import shutil
+import sys
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -49,9 +50,10 @@ _claude_blocked_args: dict[str, BlockedArgMode] = {
     "--permission-mode": BlockedArgMode.WITH_VALUE,
     "--mcp-config": BlockedArgMode.WITH_VALUE,
     "--effort": BlockedArgMode.WITH_VALUE,
+    "--include-partial-messages": BlockedArgMode.STANDALONE,
 }
 
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5"
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 
 
 # ─── stream-json type defs ─────────────────────────────────────
@@ -64,6 +66,7 @@ class _ClaudeSDKMessage:
         "type", "message", "subtype", "session_id", "model",
         "result_text", "is_error", "duration_ms", "num_turns",
         "usage", "model_usage", "request_id", "request",
+        "event", "parent_tool_use_id",
     )
 
     def __init__(self, raw: dict[str, Any]) -> None:
@@ -82,6 +85,9 @@ class _ClaudeSDKMessage:
         # control request
         self.request_id: str = raw.get("request_id", "")
         self.request: dict[str, Any] | None = raw.get("request")
+        # stream_event fields (--include-partial-messages)
+        self.event: dict[str, Any] | None = raw.get("event")
+        self.parent_tool_use_id: str = raw.get("parent_tool_use_id", "")
 
 
 # ─── the adapter ───────────────────────────────────────────────
@@ -97,7 +103,8 @@ class ClaudeCLIAdapter(CLIAdapterBase):
     ) -> None:
         super().__init__(executable_path, extra_env)
         self._system_prompt_file: str | None = None
-        self._empty_plugin_dir: str | None = None
+        self._mcp_config_file: str | None = None
+        self._mcp_config: dict[str, Any] | None = None
 
     @property
     def name(self) -> AdapterName:
@@ -111,19 +118,18 @@ class ClaudeCLIAdapter(CLIAdapterBase):
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--verbose",
-            "--strict-mcp-config",
             "--permission-mode", "bypassPermissions",
+            # Include partial message chunks as the model generates them
+            # (token-by-token streaming, like OpenAI's stream=True).
+            # Without this flag, Claude CLI accumulates the full response
+            # before emitting a single assistant event.
+            "--include-partial-messages",
             # Prevent Claude Code from invoking the interactive AskUserQuestion
             # tool. In non-interactive/daemon mode there is no UI to render the
             # prompt, so a call returns an empty answer and the agent infers
             # silently. (mirrors multica claude.go:576)
             "--disallowedTools", "AskUserQuestion",
         ]
-        # Point plugin-dir at an empty temp directory so that Claude Code
-        # starts without any third-party plugins (superpowers, etc.).
-        # CLAUDE.md auto-discovery and OAuth login are unaffected.
-        self._empty_plugin_dir = tempfile.mkdtemp(prefix="agenthub_no_plugins_")
-        args.extend(("--plugin-dir", self._empty_plugin_dir))
         if input.model_id:
             args.extend(("--model", input.model_id))
         if input.resume_session_id:
@@ -134,6 +140,21 @@ class ClaudeCLIAdapter(CLIAdapterBase):
             # variants exist in the Claude Code CLI.
             self._system_prompt_file = _write_temp_system_prompt(input.system_prompt)
             args.extend(("--append-system-prompt-file", self._system_prompt_file))
+
+        # Expose AChat project tools (report_task_result, write_artifact, etc.)
+        # to Claude CLI via an MCP server. The CLI spawns the server as a
+        # subprocess; the server translates MCP tool calls to AChat ToolRegistry
+        # calls. This is critical for orchestration — without report_task_result
+        # the orchestrator never knows a sub-agent has finished.
+        self._mcp_config_file = _write_mcp_config(
+            input.conversation_id,
+            input.run_id,
+            input.workspace_path or "",
+            input.agent_id,
+        )
+        if self._mcp_config_file:
+            args.extend(("--mcp-config", self._mcp_config_file))
+
         # Append user custom args (blocked flags already filtered)
         custom = input.custom_args or []
         custom = filter_custom_args(custom, _claude_blocked_args)
@@ -202,12 +223,22 @@ class ClaudeCLIAdapter(CLIAdapterBase):
         next_part_index = 0
         in_message = False
 
-        logger.info("[claude] reading events from stdout...")
+        # per-content-block tracking for stream_event deltas
+        _blk_type: str = ""          # "text" | "thinking" | "tool_use"
+        _blk_index: int = -1         # content block index
+        _tool_name: str = ""         # tool name (for tool_use blocks)
+        _tool_id: str = ""           # tool call id
+        _tool_input_buf: str = ""    # accumulated JSON input deltas
+        _streamed: bool = False      # True once we see a stream_event
+
+        t_spawn = time.monotonic()
+        logger.info("[claude] reading events from stdout (t=%.3fs)...", 0.0)
         try:
             async for line_raw in _read_lines(proc.stdout, cancel_event):
                 if cancel_event.is_set():
                     break
 
+                t_line = time.monotonic() - t_spawn
                 line = line_raw.strip()
                 if not line:
                     continue
@@ -215,12 +246,16 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                 try:
                     raw = json.loads(line)
                 except json.JSONDecodeError:
+                    # Non-JSON lines are likely stderr output mixed into the
+                    # ConPTY stream (or CLI startup banners). Log them so
+                    # they're visible for diagnostics.
+                    logger.debug("[claude:stderr] %s", line[:500])
                     continue
 
                 msg = _ClaudeSDKMessage(raw)
 
                 if not any_event:
-                    logger.info("[claude] first event: type=%s", msg.type)
+                    logger.info("[claude] first event: type=%s (t=%.3fs)", msg.type, t_line)
                 any_event = True
 
                 # Capture session id from any event that carries it
@@ -233,6 +268,135 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                     # Silently capture session_id and skip; do NOT create a message.
                     pass
 
+                elif msg.type == "stream_event":
+                    # --include-partial-messages: raw Anthropic streaming events
+                    # delivered token-by-token. This is the primary streaming path.
+                    event = msg.event
+                    if not event:
+                        continue
+                    _streamed = True
+                    etype = event.get("type", "")
+
+                    if etype == "message_start":
+                        if not in_message:
+                            in_message = True
+                            message_id = new_message_id()
+                            text_part_index = -1
+                            thinking_part_index = -1
+                            next_part_index = 0
+                            _blk_type = ""
+                            _blk_index = -1
+                            _tool_name = ""
+                            _tool_id = ""
+                            _tool_input_buf = ""
+                            yield MessageStartEvent(
+                                conversation_id=input.conversation_id,
+                                timestamp=now_ms(),
+                                message_id=message_id,
+                                agent_id=input.agent_id,
+                                run_id=input.run_id,
+                            )
+                        # Capture model from the message_start event
+                        msg_obj = event.get("message", {})
+                        if msg_obj.get("model"):
+                            model_id = msg_obj["model"]
+
+                    elif etype == "content_block_start":
+                        blk = event.get("content_block", {})
+                        _blk_type = blk.get("type", "")
+                        _blk_index = blk.get("index", -1)
+                        if _blk_type == "text":
+                            text_part_index = next_part_index
+                            next_part_index += 1
+                            yield PartStartEvent(
+                                conversation_id=input.conversation_id,
+                                timestamp=now_ms(),
+                                message_id=message_id,
+                                part_index=text_part_index,
+                                part={"type": "text", "content": ""},
+                            )
+                        elif _blk_type == "thinking":
+                            thinking_part_index = next_part_index
+                            next_part_index += 1
+                            yield PartStartEvent(
+                                conversation_id=input.conversation_id,
+                                timestamp=now_ms(),
+                                message_id=message_id,
+                                part_index=thinking_part_index,
+                                part={"type": "thinking", "content": ""},
+                            )
+                        elif _blk_type == "tool_use":
+                            _tool_name = blk.get("name", "")
+                            _tool_id = blk.get("id", "")
+                            _tool_input_buf = ""
+
+                    elif etype == "content_block_delta":
+                        delta = event.get("delta", {})
+                        dtype = delta.get("type", "")
+                        if dtype == "text_delta":
+                            text = delta.get("text", "")
+                            if text:
+                                output_parts.append(text)
+                                yield PartDeltaEvent(
+                                    conversation_id=input.conversation_id,
+                                    timestamp=now_ms(),
+                                    message_id=message_id,
+                                    part_index=text_part_index,
+                                    delta={"type": "text.append", "text": text},
+                                )
+                        elif dtype == "thinking_delta":
+                            text = delta.get("thinking", "")
+                            if text:
+                                yield PartDeltaEvent(
+                                    conversation_id=input.conversation_id,
+                                    timestamp=now_ms(),
+                                    message_id=message_id,
+                                    part_index=thinking_part_index,
+                                    delta={"type": "thinking.append", "text": text},
+                                )
+                        elif dtype == "input_json_delta":
+                            _tool_input_buf += delta.get("partial_json", "")
+
+                    elif etype == "content_block_stop":
+                        if _blk_type == "text" and text_part_index >= 0:
+                            yield PartEndEvent(
+                                conversation_id=input.conversation_id,
+                                timestamp=now_ms(),
+                                message_id=message_id,
+                                part_index=text_part_index,
+                            )
+                        elif _blk_type == "thinking" and thinking_part_index >= 0:
+                            yield PartEndEvent(
+                                conversation_id=input.conversation_id,
+                                timestamp=now_ms(),
+                                message_id=message_id,
+                                part_index=thinking_part_index,
+                            )
+                        elif _blk_type == "tool_use" and _tool_id:
+                            # Try to parse accumulated JSON input
+                            tool_input: dict[str, Any] = {}
+                            if _tool_input_buf:
+                                try:
+                                    tool_input = json.loads(_tool_input_buf)
+                                except (json.JSONDecodeError, TypeError):
+                                    tool_input = {}
+                            yield ToolCallEvent(
+                                conversation_id=input.conversation_id,
+                                timestamp=now_ms(),
+                                message_id=message_id,
+                                call_id=_tool_id,
+                                tool_name=_tool_name,
+                                args=tool_input,
+                            )
+                        _blk_type = ""
+                        _blk_index = -1
+
+                    elif etype in ("message_delta", "message_stop", "ping"):
+                        # message_delta: carries stop_reason, usage
+                        # message_stop: end-of-message signal
+                        # ping: keep-alive, ignore
+                        pass
+
                 elif msg.type == "assistant":
                     if not in_message:
                         in_message = True
@@ -240,6 +404,7 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                         text_part_index = -1
                         thinking_part_index = -1
                         next_part_index = 0
+                        _streamed = False
                         yield MessageStartEvent(
                             conversation_id=input.conversation_id,
                             timestamp=now_ms(),
@@ -267,6 +432,12 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                             btype = block.get("type", "")
 
                             if btype == "text":
+                                # When --include-partial-messages is active the
+                                # text content has already been streamed token-by-
+                                # token via stream_event; skip it here to avoid
+                                # duplicate events.
+                                if _streamed:
+                                    continue
                                 text = block.get("text", "")
                                 if text:
                                     output_parts.append(text)
@@ -289,6 +460,8 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                                     )
 
                             elif btype == "thinking":
+                                if _streamed:
+                                    continue
                                 text = block.get("text", "")
                                 if text:
                                     if thinking_part_index < 0:
@@ -344,6 +517,8 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                                 )
 
                 elif msg.type == "result":
+                    t_result = time.monotonic() - t_spawn
+                    logger.info("[claude] result event (t=%.3fs)", t_result)
                     if msg.session_id:
                         session_id = msg.session_id
                     result_is_error = msg.is_error
@@ -389,14 +564,13 @@ class ClaudeCLIAdapter(CLIAdapterBase):
             cancel_watchdog.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cancel_watchdog
-            # Remove temp system prompt file
+            # Remove temp files
             if self._system_prompt_file:
                 _remove_temp_file(self._system_prompt_file)
                 self._system_prompt_file = None
-            # Remove empty plugin-dir
-            if self._empty_plugin_dir:
-                _remove_temp_dir(self._empty_plugin_dir)
-                self._empty_plugin_dir = None
+            if self._mcp_config_file:
+                _remove_temp_file(self._mcp_config_file)
+                self._mcp_config_file = None
 
         # ── post-loop: check exit code ─────────────────────────────
         logger.info("[claude] event loop ended, any_event=%s, cancel=%s",
@@ -455,20 +629,23 @@ class ClaudeCLIAdapter(CLIAdapterBase):
 
         # ── drain remaining output parts ──────────────────────────
         if in_message and message_id:
-            if text_part_index >= 0:
-                yield PartEndEvent(
-                    conversation_id=input.conversation_id,
-                    timestamp=now_ms(),
-                    message_id=message_id,
-                    part_index=text_part_index,
-                )
-            if thinking_part_index >= 0:
-                yield PartEndEvent(
-                    conversation_id=input.conversation_id,
-                    timestamp=now_ms(),
-                    message_id=message_id,
-                    part_index=thinking_part_index,
-                )
+            # With --include-partial-messages, PartEnd events are already
+            # emitted by the stream_event → content_block_stop handler.
+            if not _streamed:
+                if text_part_index >= 0:
+                    yield PartEndEvent(
+                        conversation_id=input.conversation_id,
+                        timestamp=now_ms(),
+                        message_id=message_id,
+                        part_index=text_part_index,
+                    )
+                if thinking_part_index >= 0:
+                    yield PartEndEvent(
+                        conversation_id=input.conversation_id,
+                        timestamp=now_ms(),
+                        message_id=message_id,
+                        part_index=thinking_part_index,
+                    )
             msg_usage = MessageUsage(
                 input_tokens=last_input_tokens,
                 output_tokens=run_output_tokens,
@@ -570,6 +747,8 @@ async def _read_lines(
 
     Stops when the stream is exhausted or ``cancel_event`` is set.
     """
+    t0 = time.monotonic()
+    first_line = True
     while not cancel_event.is_set():
         try:
             line = await stream.readline()
@@ -578,6 +757,10 @@ async def _read_lines(
         if not line:
             return  # EOF
         decoded = line.decode("utf-8", errors="replace")
+        if first_line and decoded.strip():
+            t_elapsed = time.monotonic() - t0
+            logger.info("[claude:_read_lines] first line arrived after %.3fs", t_elapsed)
+            first_line = False
         if decoded.strip():
             yield decoded
 
@@ -603,10 +786,59 @@ def _remove_temp_file(path: str) -> None:
         os.remove(path)
 
 
-def _remove_temp_dir(path: str) -> None:
-    """Remove a temp directory recursively, swallowing any error."""
-    with contextlib.suppress(OSError):
-        shutil.rmtree(path)
+# ─── MCP config builder ───────────────────────────────────────────
+
+def _write_mcp_config(
+    conversation_id: str,
+    run_id: str,
+    workspace_path: str,
+    agent_id: str,
+) -> str | None:
+    """Write the Claude CLI MCP config JSON file.
+
+    Tells Claude CLI how to spawn the AChat MCP Bridge (a stdio-based MCP
+    server that exposes AChat project tools like ``report_task_result``).
+
+    Returns the path to the temp config file, or ``None`` if the bridge
+    module cannot be located.
+    """
+    # Find the backend directory so the MCP server can import app.mcp_bridge.
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # backend_dir is .../backend/app/adapters → we need .../backend
+    backend_root = os.path.dirname(backend_dir)  # .../backend
+
+    # The MCP server script is at backend/app/mcp_bridge.py.
+    # We launch it as: python -m app.mcp_bridge ...
+    # For that to work, backend_root must be on PYTHONPATH.
+    python_exe = sys.executable
+
+    mcp_config = {
+        "mcpServers": {
+            "achat-tools": {
+                "type": "stdio",
+                "command": python_exe,
+                "args": [
+                    "-m", "app.mcp_bridge",
+                    "--conversation-id", conversation_id,
+                    "--run-id", run_id,
+                    "--workspace-path", workspace_path,
+                    "--agent-id", agent_id,
+                ],
+                "env": {
+                    "PYTHONPATH": backend_root,
+                    "PYTHONUNBUFFERED": "1",
+                    "DATABASE_URL": os.environ.get("DATABASE_URL", ""),
+                },
+            }
+        }
+    }
+    logger.info("[claude] MCP config: %s", json.dumps(mcp_config, indent=2))
+
+    fd, path = tempfile.mkstemp(prefix="agenthub_mcp_", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(mcp_config, f, indent=2)
+    logger.info("[claude] wrote MCP config to %s", path)
+    return path
 
 
 # ─── legacy alias ───
