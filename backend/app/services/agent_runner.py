@@ -834,10 +834,42 @@ async def consume_stream(
             current_message_id = None
         if event.type == "tool.result":
             tool_name = tool_name_by_call_id.get(event.call_id)
-            if tool_name and not event.is_error and tool_name == REPORT_TASK_RESULT_TOOL_NAME:
+            # Accept both bare AChat tool names (SDK agents) and
+            # MCP-prefixed names from CLI agents (e.g.
+            # "mcp__achat-tools__report_task_result").
+            is_report = (
+                tool_name
+                and not event.is_error
+                and (
+                    tool_name == REPORT_TASK_RESULT_TOOL_NAME
+                    or tool_name.endswith(f"__{REPORT_TASK_RESULT_TOOL_NAME}")
+                )
+            )
+            if is_report:
+                logger.info(
+                    "[consume_stream] report_task_result detected: "
+                    "tool_name=%s, call_id=%s, result_type=%s, result_preview=%s",
+                    tool_name,
+                    event.call_id,
+                    type(event.result).__name__,
+                    str(event.result)[:200],
+                )
                 report, _err = parse_and_normalize(event.result)
                 if report:
+                    logger.info(
+                        "[consume_stream] report_task_result parsed OK: "
+                        "status=%s, summary=%s",
+                        report.get("status"),
+                        report.get("summary", "")[:100],
+                    )
                     task_report = report
+                else:
+                    logger.warning(
+                        "[consume_stream] report_task_result parse FAILED: "
+                        "error=%s, raw=%s",
+                        _err,
+                        str(event.result)[:200],
+                    )
             handoff = _read_artifact_handoff_result(event.result)
             if handoff:
                 output_key_by_artifact_id[handoff[0]] = handoff[1]

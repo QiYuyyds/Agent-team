@@ -96,6 +96,18 @@ def _read_codex_mcp_tool_arguments(args: object) -> object:
 # ─── parsing ──────────────────────
 def parse_dispatch_plan_tool_args(args: object) -> list[DispatchPlanItem]:
     """Parse + validate raw plan_tasks tool args into typed DispatchPlanItems."""
+    # Some adapters (MCP-provided tools) deliver args as a JSON string rather
+    # than a dict. Parse it before validating.
+    if isinstance(args, str):
+        import json
+
+        try:
+            args = json.loads(args)
+        except (ValueError, TypeError):
+            raise ValueError(
+                "Invalid dispatch plan: plan_tasks args must include a tasks array"
+            ) from None
+
     if not _is_record(args) or not isinstance(args.get("tasks"), list):
         raise ValueError("Invalid dispatch plan: plan_tasks args must include a tasks array")
 

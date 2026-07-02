@@ -1,23 +1,39 @@
 """Context-compaction service.
 
-Port of src/server/context-compaction-service.ts — but only the subset that
-agent-runner imports: getLatestContextSummary / prefixPromptWithContextSummary /
-renderConversationSummaryBlock. These three read/format the latest stored
-ContextSummary row; none of them touch an LLM.
+Port of src/server/context-compaction-service.ts.
 
-DEFERRED: the full ``compactConversation`` flow (load uncompacted messages →
-render → call a summary model → insert a ContextSummary + system message) is NOT
-ported here. It hits the Anthropic/OpenAI SDKs and is only triggered by an explicit
-"compact" action, not by the runner's hot path. See the deferral note in the port
-report.
+Read/format helpers (used by agent-runner's hot path, no LLM):
+  - get_latest_context_summary
+  - render_conversation_summary_block
+  - prefix_prompt_with_context_summary
+
+Full compaction flow (LLM-backed, triggered by the explicit /compact action):
+  - compact_conversation — load uncompacted history → summarise via LLM →
+    persist a ContextSummary + a system message → return both.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import desc, select
+import logging
+from dataclasses import dataclass
+
+from sqlalchemy import and_, asc, desc, select
 
 from app.db.engine import get_db
-from app.db.models import ContextSummary
+from app.db.models import Agent, ContextSummary, Conversation, Message
+from app.schemas.events import MessageAddedEvent, MessageRecord
+from app.schemas.messages import ContextSummaryRecord
+from app.services.event_bus import event_bus
+from app.utils.clock import now_ms
+from app.utils.ids import new_context_summary_id, new_message_id
+from app.utils.model_registry import estimate_tokens
+
+logger = logging.getLogger(__name__)
+
+# Keep the most recent N messages uncompacted; summarise everything older.
+KEEP_RECENT_MESSAGES = 10
+# Refuse to compact when there aren't enough older messages to be worth it.
+MIN_COMPACTABLE = 4
 
 
 async def get_latest_context_summary(conversation_id: str) -> ContextSummary | None:
@@ -55,3 +71,277 @@ async def prefix_prompt_with_context_summary(conversation_id: str, prompt: str) 
 def _escape_attr(value: str) -> str:
     # XML attribute escaping, matching the TS escapeAttr (&, ", < only).
     return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+
+
+# ─── full compaction flow (LLM-backed) ──────────────────────────────────────
+
+
+@dataclass
+class CompactResult:
+    """Result of a /compact action: the new summary + the system message."""
+
+    summary: ContextSummaryRecord
+    message: MessageRecord
+
+
+async def compact_conversation(conversation_id: str) -> CompactResult:
+    """Summarise older history into a ContextSummary and insert a system message.
+
+    Raises ValueError (surfaced as HTTP 400) when compaction cannot proceed:
+    conversation missing, nothing to compact, or no model-backed agent.
+    """
+    # a) conversation exists?
+    async with get_db() as db:
+        conv = await db.get(Conversation, conversation_id)
+        if conv is None:
+            raise ValueError("会话不存在")
+        agent_ids = conv.agent_ids_list
+
+    # b) incremental cut-off: only compact messages after the last summary
+    latest = await get_latest_context_summary(conversation_id)
+    since_created_at = latest.covered_until_created_at if latest else None
+
+    # c) load completed messages after the cut-off, oldest first
+    async with get_db() as db:
+        where = [
+            Message.conversation_id == conversation_id,
+            Message.status == "complete",
+        ]
+        if since_created_at is not None:
+            where.append(Message.created_at > since_created_at)
+        rows = (
+            (
+                await db.execute(
+                    select(Message).where(and_(*where)).order_by(asc(Message.created_at))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    # d) keep the most recent N; compact the rest
+    if len(rows) <= KEEP_RECENT_MESSAGES:
+        raise ValueError("没有足够的历史消息可压缩")
+    to_compact = rows[:-KEEP_RECENT_MESSAGES]
+    if len(to_compact) < MIN_COMPACTABLE:
+        raise ValueError("没有足够的历史消息可压缩")
+
+    # e) pick a summariser model: first Custom agent with model config
+    model_provider, model_id, api_key, api_base_url = await _pick_summary_model(agent_ids)
+
+    # f) render the messages to compact into a transcript
+    agent_names = await _load_agent_names(agent_ids)
+    transcript = _render_transcript(to_compact, agent_names)
+    prior = latest.summary if latest else None
+
+    # g) call the LLM
+    summary_text = await _summarise(
+        transcript, prior, model_provider, model_id, api_key, api_base_url
+    )
+    if not summary_text:
+        raise ValueError("摘要生成失败：模型返回为空")
+
+    # h) persist ContextSummary
+    last = to_compact[-1]
+    summary_id = new_context_summary_id()
+    created_at = now_ms()
+    token_estimate = estimate_tokens(transcript)
+    async with get_db() as db:
+        row = ContextSummary(
+            id=summary_id,
+            conversation_id=conversation_id,
+            summary=summary_text,
+            covered_until_message_id=last.id,
+            covered_until_created_at=last.created_at,
+            source_message_count=len(to_compact),
+            token_estimate=token_estimate,
+            model_provider=model_provider,
+            model_id=model_id,
+            created_at=created_at,
+        )
+        db.add(row)
+
+    summary_record = ContextSummaryRecord(
+        id=summary_id,
+        conversation_id=conversation_id,
+        summary=summary_text,
+        covered_until_message_id=last.id,
+        covered_until_created_at=last.created_at,
+        source_message_count=len(to_compact),
+        token_estimate=token_estimate,
+        model_provider=model_provider,
+        model_id=model_id,
+        created_at=created_at,
+    )
+
+    # i) insert a system message announcing the compaction
+    sys_msg_id = new_message_id()
+    sys_now = now_ms()
+    sys_parts = [
+        {
+            "type": "text",
+            "content": f"已将 {len(to_compact)} 条历史消息压缩为上下文摘要。",
+        }
+    ]
+    async with get_db() as db:
+        sys_msg = Message(
+            id=sys_msg_id,
+            conversation_id=conversation_id,
+            role="system",
+            agent_id=None,
+            status="complete",
+            parent_message_id=None,
+            run_id=None,
+            created_at=sys_now,
+        )
+        sys_msg.parts_list = sys_parts
+        sys_msg.mentioned_agent_ids_list = []
+        db.add(sys_msg)
+
+    sys_record = MessageRecord(
+        id=sys_msg_id,
+        conversation_id=conversation_id,
+        role="system",
+        agent_id=None,
+        parts=sys_parts,
+        status="complete",
+        parent_message_id=None,
+        mentioned_agent_ids=[],
+        run_id=None,
+        usage=None,
+        created_at=sys_now,
+    )
+    event_bus.publish(
+        MessageAddedEvent(
+            conversation_id=conversation_id,
+            timestamp=sys_now,
+            message=sys_record,
+        )
+    )
+
+    logger.info(
+        "[compact] conversation=%s compacted=%d summary_id=%s model=%s",
+        conversation_id,
+        len(to_compact),
+        summary_id,
+        model_id,
+    )
+    return CompactResult(summary=summary_record, message=sys_record)
+
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+
+async def _pick_summary_model(
+    agent_ids: list[str],
+) -> tuple[str, str, str | None, str | None]:
+    """First Custom agent (adapter_name='custom') with a full model config.
+
+    Returns (model_provider, model_id, api_key, api_base_url).
+    Raises ValueError when no model-backed agent exists (e.g. CLI-only chat).
+    """
+    if not agent_ids:
+        raise ValueError("当前会话没有配置模型的 agent，无法生成摘要")
+    async with get_db() as db:
+        agents = (
+            (await db.execute(select(Agent).where(Agent.id.in_(agent_ids))))
+            .scalars()
+            .all()
+        )
+    by_id = {a.id: a for a in agents}
+    # preserve conversation agent order
+    for aid in agent_ids:
+        agent = by_id.get(aid)
+        if (
+            agent is not None
+            and agent.adapter_name == "custom"
+            and agent.model_provider
+            and agent.model_id
+        ):
+            return (agent.model_provider, agent.model_id, agent.api_key, agent.api_base_url)
+    raise ValueError("当前会话没有配置模型的 agent，无法生成摘要")
+
+
+async def _load_agent_names(agent_ids: list[str]) -> dict[str, str]:
+    if not agent_ids:
+        return {}
+    async with get_db() as db:
+        agents = (
+            (await db.execute(select(Agent).where(Agent.id.in_(agent_ids))))
+            .scalars()
+            .all()
+        )
+    return {a.id: a.name for a in agents}
+
+
+def _render_transcript(messages: list[Message], agent_names: dict[str, str]) -> str:
+    """Render messages as a plain-text transcript for the summariser."""
+    lines: list[str] = []
+    for msg in messages:
+        text = _message_text(msg)
+        if not text:
+            continue
+        if msg.role == "user":
+            who = "用户"
+        elif msg.role == "system":
+            who = "系统"
+        else:
+            who = agent_names.get(msg.agent_id or "", msg.agent_id or "Agent")
+        lines.append(f"{who}：{text}")
+    return "\n".join(lines)
+
+
+def _message_text(msg: Message) -> str:
+    """Extract plain text from a message's parts."""
+    texts = [
+        p.get("content", "")
+        for p in msg.parts_list
+        if p.get("type") == "text" and p.get("content")
+    ]
+    return "\n".join(texts).strip()
+
+
+async def _summarise(
+    transcript: str,
+    prior_summary: str | None,
+    model_provider: str,
+    model_id: str,
+    api_key: str | None,
+    api_base_url: str | None,
+) -> str:
+    """Call the LLM to produce a compaction summary. Raises on API failure."""
+    from openai import AsyncOpenAI
+
+    from app.adapters.custom_provider_client import resolve_custom_provider_client_config
+
+    prior_block = (
+        f"以下是更早对话的已有摘要，请在此基础上继续整合：\n{prior_summary}\n\n"
+        if prior_summary
+        else ""
+    )
+    prompt = (
+        "你在压缩一段多 Agent 群聊的历史，为后续对话保留必要上下文。\n"
+        f"{prior_block}"
+        "请把下面的对话压缩成一份简洁但信息完整的摘要，务必保留：\n"
+        "- 用户的核心目标和明确偏好\n"
+        "- 关键决策与结论\n"
+        "- 已产出的产物（含 artifact/deployment id）\n"
+        "- 尚未完成或待跟进的事项\n"
+        "只输出摘要正文，不要加前缀、标题或引号。\n\n"
+        f"对话内容：\n{transcript}"
+    )
+
+    config = resolve_custom_provider_client_config(
+        model_provider, override_key=api_key, api_base_url=api_base_url
+    )
+    client = AsyncOpenAI(
+        api_key=config.api_key, base_url=config.base_url, max_retries=1
+    )
+    response = await client.chat.completions.create(
+        model=model_id,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1024,
+        temperature=0.3,
+    )
+    raw = response.choices[0].message.content
+    return raw.strip() if raw else ""

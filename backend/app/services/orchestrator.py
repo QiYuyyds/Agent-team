@@ -97,6 +97,10 @@ from app.utils.dispatch_run_evidence import (
 from app.utils.ids import new_artifact_id  # noqa: E402
 from app.utils.workspace_utils import assert_path_within_workspace, get_effective_cwd
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # ─── dispatch result + evaluation views (mirror the TS interfaces) ────────────
 @dataclass
@@ -406,7 +410,18 @@ async def _run_plan_stage(
         plan_args = extract_plan_tasks_tool_args(event.tool_name, event.args)
         if plan_args is None:
             return None
-        plan = parse_dispatch_plan_tool_args(plan_args)
+        try:
+            plan = parse_dispatch_plan_tool_args(plan_args)
+        except ValueError as e:
+            # Log what the LLM actually sent so intermittent plan failures
+            # can be diagnosed (usually an incomplete / hallucinated call).
+            logger.warning(
+                "[orchestrator] plan_tasks parse failed: %s | tool_name=%s | args=%s",
+                e,
+                event.tool_name,
+                str(event.args)[:500],
+            )
+            raise
         plan_ref["value"] = plan
         return {
             "stop": True,

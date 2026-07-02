@@ -9,6 +9,7 @@ evidence recorded during the run (evaluate half, consumed by AgentRunner in
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -137,6 +138,12 @@ def normalize_task_result_report(data: ReportTaskResultArgs) -> dict[str, Any]:
 
 def parse_and_normalize(value: Any) -> tuple[dict[str, Any] | None, str | None]:
     """Validate raw tool args → (normalized report, None) or (None, error)."""
+    # MCP tools return results as JSON strings; SDK tools pass dicts directly.
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as e:
+            return None, f"Invalid JSON in task result: {e}"
     try:
         parsed = ReportTaskResultArgs.model_validate(value)
     except ValidationError as err:
@@ -235,7 +242,20 @@ def has_successful_verification_command_evidence(evidence: RunToolEvidence) -> b
 
 
 def _is_failed_command(command: RunCommandEvidence) -> bool:
-    return command.is_error or command.timed_out or command.exit_code != 0
+    # A command counts as a real failure only when it produced a concrete
+    # failure signal: a non-zero exit code, a timeout, or a tool error that
+    # carries an actual message. An "empty" tool error (is_error=True but no
+    # error text AND no exit code) is environment/harness noise — e.g. a
+    # subprocess spawn that failed for infra reasons — not evidence that the
+    # task itself failed. Treating those as failures made the orchestrator
+    # reject perfectly good work on every attempt.
+    if command.timed_out:
+        return True
+    if command.exit_code is not None and command.exit_code != 0:
+        return True
+    if command.is_error and (command.error or "").strip():
+        return True
+    return False
 
 
 def _has_later_successful_command(
@@ -407,8 +427,27 @@ def evaluate_task_result_report(
             error=f'Task "{task.id}" report is missing successful command evidence: {details}',
         )
 
-    if is_code_implementation_task(task) and not has_successful_verification_command_evidence(
-        evidence
+    # Runnable verification gate. Only applies to tasks that produce a real
+    # project (declared expected_outputs.type == "project"). A bare keyword
+    # match on the task text ("实现一个打招呼页面") must NOT force a build
+    # command — many such tasks deliver a static artifact with no buildable
+    # project, and requiring `npm build` there rejects good work every attempt.
+    #
+    # Crucially: if the task explicitly declared required_commands and they all
+    # passed (checked above — we only reach here when missing_commands is
+    # empty), the user's own verification command IS the evidence. Do NOT
+    # additionally demand a whitelisted build command (npm/pytest/tsc/...),
+    # because a custom validator like `python validate_html.py` is not on the
+    # whitelist and would fail the gate forever despite exiting 0.
+    produces_project = any(
+        (o.type == "project") for o in (task.expected_outputs or [])
+    )
+    declared_required_commands = bool(task.required_commands)
+    if (
+        produces_project
+        and not declared_required_commands
+        and is_code_implementation_task(task)
+        and not has_successful_verification_command_evidence(evidence)
     ):
         return TaskResultReportEvaluation(
             ok=False,

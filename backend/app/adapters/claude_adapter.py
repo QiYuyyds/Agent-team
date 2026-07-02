@@ -134,12 +134,28 @@ class ClaudeCLIAdapter(CLIAdapterBase):
             args.extend(("--model", input.model_id))
         if input.resume_session_id:
             args.extend(("--resume", input.resume_session_id))
-        if input.system_prompt:
-            # Windows command-line cannot carry newlines; write to temp file.
-            # Both --system-prompt[-file] and --append-system-prompt[-file]
-            # variants exist in the Claude Code CLI.
-            self._system_prompt_file = _write_temp_system_prompt(input.system_prompt)
-            args.extend(("--append-system-prompt-file", self._system_prompt_file))
+        # MCP tool name mapping: Claude CLI prefixes all MCP tools as
+        # mcp__<server>__<tool>, but orchestrator prompts use bare AChat
+        # tool names (e.g. "call report_task_result"). Without this hint
+        # the LLM cannot find the tools and falls back to text-only mode.
+        _mcp_tool_hint = (
+            "\n\n## AChat MCP Tools\n"
+            "AChat platform tools are available via the \"achat-tools\" MCP "
+            "server. When instructions tell you to call an AChat tool, you "
+            "MUST use the MCP-prefixed name as shown below:\n\n"
+            "- `report_task_result` → `mcp__achat-tools__report_task_result`\n"
+            "- `write_artifact` → `mcp__achat-tools__write_artifact`\n"
+            "- `read_artifact` → `mcp__achat-tools__read_artifact`\n"
+            "- `ask_user` → `mcp__achat-tools__ask_user`\n"
+            "- `deploy_artifact` → `mcp__achat-tools__deploy_artifact`\n"
+            "- `deploy_workspace` → `mcp__achat-tools__deploy_workspace`\n"
+        )
+        _sp_content = (input.system_prompt or "") + _mcp_tool_hint
+        # Windows command-line cannot carry newlines; write to temp file.
+        # Both --system-prompt[-file] and --append-system-prompt[-file]
+        # variants exist in the Claude Code CLI.
+        self._system_prompt_file = _write_temp_system_prompt(_sp_content)
+        args.extend(("--append-system-prompt-file", self._system_prompt_file))
 
         # Expose AChat project tools (report_task_result, write_artifact, etc.)
         # to Claude CLI via an MCP server. The CLI spawns the server as a
@@ -153,7 +169,8 @@ class ClaudeCLIAdapter(CLIAdapterBase):
             input.agent_id,
         )
         if self._mcp_config_file:
-            args.extend(("--mcp-config", self._mcp_config_file))
+            # Use = format to avoid any argument parsing ambiguity on Windows.
+            args.append(f"--mcp-config={self._mcp_config_file}")
 
         # Append user custom args (blocked flags already filtered)
         custom = input.custom_args or []
@@ -505,7 +522,19 @@ class ClaudeCLIAdapter(CLIAdapterBase):
                         for block in msg.message.get("content", []):
                             if block.get("type") == "tool_result":
                                 result_content = block.get("content", "")
-                                if isinstance(result_content, (dict, list)):
+                                # MCP tools return content in the format:
+                                #   [{"type":"text","text":"<actual_result>"}]
+                                # Extract the text from MCP content blocks.
+                                if isinstance(result_content, list):
+                                    texts = []
+                                    for item in result_content:
+                                        if isinstance(item, dict) and item.get("type") == "text":
+                                            texts.append(item.get("text", ""))
+                                    if texts:
+                                        result_content = "\n".join(texts)
+                                    else:
+                                        result_content = json.dumps(result_content)
+                                elif isinstance(result_content, dict):
                                     result_content = json.dumps(result_content)
                                 yield ToolResultEvent(
                                     conversation_id=input.conversation_id,

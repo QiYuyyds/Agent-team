@@ -30,7 +30,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
+import tempfile
+import time
 from typing import Any
 
 from app.tools.base import ToolContext, ToolDef, ToolResult
@@ -236,6 +239,25 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
+    # Write a startup marker so we can verify the bridge was actually
+    # spawned by Claude CLI (useful for debugging MCP connectivity).
+    marker_path = os.path.join(
+        tempfile.gettempdir(),
+        f"achat_mcp_startup_{args.run_id}.txt",
+    )
+    try:
+        with open(marker_path, "w") as f:
+            f.write(f"pid={os.getpid()}\n")
+            f.write(f"conversation_id={args.conversation_id}\n")
+            f.write(f"run_id={args.run_id}\n")
+            f.write(f"started_at={time.time()}\n")
+            f.write(f"python={sys.executable}\n")
+            f.write(f"cwd={os.getcwd()}\n")
+            f.write(f"pythonpath={os.environ.get('PYTHONPATH', 'NOT SET')}\n")
+            f.write(f"database_url={'SET' if os.environ.get('DATABASE_URL') else 'NOT SET'}\n")
+    except Exception:
+        pass
+
     tools = {
         name: tool_registry.get(name)
         for name in CLI_MCP_TOOL_NAMES
@@ -246,6 +268,7 @@ def main() -> None:
         sys.exit(1)
 
     _log(f"exposing {len(tools)} tools: {sorted(tools.keys())}")
+    _log(f"startup marker: {marker_path}")
 
     ctx = ToolContext(
         conversation_id=args.conversation_id,
