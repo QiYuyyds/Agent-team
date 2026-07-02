@@ -73,6 +73,13 @@ def _escape_attr(value: str) -> str:
     return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
+def _fmt_k(tokens: int) -> str:
+    """Format a token count like the frontend badge: 10123 -> '10.1k'."""
+    if tokens >= 1000:
+        return f"{tokens / 1000:.1f}k"
+    return str(tokens)
+
+
 # ─── full compaction flow (LLM-backed) ──────────────────────────────────────
 
 
@@ -82,6 +89,10 @@ class CompactResult:
 
     summary: ContextSummaryRecord
     message: MessageRecord
+    # Estimated next-turn context (prompt tokens) before vs. after compaction —
+    # the frontend uses ctx_after to optimistically refresh its "当前 ctx" badge.
+    ctx_before: int
+    ctx_after: int
 
 
 async def compact_conversation(conversation_id: str) -> CompactResult:
@@ -133,6 +144,15 @@ async def compact_conversation(conversation_id: str) -> CompactResult:
     agent_names = await _load_agent_names(agent_ids)
     transcript = _render_transcript(to_compact, agent_names)
     prior = latest.summary if latest else None
+    kept = rows[-KEEP_RECENT_MESSAGES:]
+
+    # ctx-before: the full uncompacted tail that the next turn would otherwise
+    # carry (prior summary block, if any, + every message after the cut-off).
+    ctx_before = estimate_tokens(transcript) + sum(
+        estimate_tokens(_message_text(m)) for m in kept
+    )
+    if prior:
+        ctx_before += estimate_tokens(prior)
 
     # g) call the LLM
     summary_text = await _summarise(
@@ -140,6 +160,11 @@ async def compact_conversation(conversation_id: str) -> CompactResult:
     )
     if not summary_text:
         raise ValueError("摘要生成失败：模型返回为空")
+
+    # ctx-after: the new summary block + only the kept recent messages.
+    ctx_after = estimate_tokens(summary_text) + sum(
+        estimate_tokens(_message_text(m)) for m in kept
+    )
 
     # h) persist ContextSummary
     last = to_compact[-1]
@@ -177,12 +202,16 @@ async def compact_conversation(conversation_id: str) -> CompactResult:
     # i) insert a system message announcing the compaction
     sys_msg_id = new_message_id()
     sys_now = now_ms()
-    sys_parts = [
-        {
-            "type": "text",
-            "content": f"已将 {len(to_compact)} 条历史消息压缩为上下文摘要。",
-        }
-    ]
+    saved = max(0, ctx_before - ctx_after)
+    if saved >= 500:
+        content = (
+            f"已将 {len(to_compact)} 条历史消息压缩为上下文摘要。"
+            f"下次对话的上下文预计从 ~{_fmt_k(ctx_before)} 降到 "
+            f"~{_fmt_k(ctx_after)}（约省 {_fmt_k(saved)} tokens）。"
+        )
+    else:
+        content = f"已将 {len(to_compact)} 条历史消息压缩为上下文摘要。"
+    sys_parts = [{"type": "text", "content": content}]
     async with get_db() as db:
         sys_msg = Message(
             id=sys_msg_id,
@@ -226,7 +255,12 @@ async def compact_conversation(conversation_id: str) -> CompactResult:
         summary_id,
         model_id,
     )
-    return CompactResult(summary=summary_record, message=sys_record)
+    return CompactResult(
+        summary=summary_record,
+        message=sys_record,
+        ctx_before=ctx_before,
+        ctx_after=ctx_after,
+    )
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

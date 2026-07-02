@@ -526,6 +526,10 @@ export async function deployConversationArtifact(
 export interface CompactConversationResult {
   summary: ContextSummaryRow
   message: MessageRow
+  /** 压缩前预估的下次 prompt token 数 */
+  ctxBefore: number
+  /** 压缩后预估的下次 prompt token 数（UsageBadge 用来乐观刷新「当前 ctx」） */
+  ctxAfter: number
 }
 
 export async function compactConversation(

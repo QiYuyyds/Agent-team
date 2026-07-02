@@ -22,6 +22,7 @@ export function UsageBadge({ conversationId }: { conversationId: string }) {
   const agents = useAppStore((s) => s.agents)
   const conv = useAppStore((s) => s.conversations[conversationId])
   const upsertMessage = useAppStore((s) => s.upsertMessage)
+  const setCtxOverride = useAppStore((s) => s.setCtxOverride)
   const [compacting, setCompacting] = useState(false)
 
   if (total.runCount === 0) return null
@@ -45,6 +46,8 @@ export function UsageBadge({ conversationId }: { conversationId: string }) {
     try {
       const result = await compactConversation(conversationId)
       upsertMessage(result.message)
+      // 乐观刷新「当前 ctx」到压缩后估计值；下一次真实 run 用实测值接管。
+      setCtxOverride(conversationId, result.ctxAfter, result.message.createdAt)
     } catch (err) {
       console.error('[UsageBadge] compact failed', err)
     } finally {

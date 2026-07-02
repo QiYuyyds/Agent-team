@@ -293,6 +293,8 @@ async def compact(conversation_id: str) -> JSONResponse:
         content={
             "summary": result.summary.model_dump(by_alias=True),
             "message": result.message.model_dump(by_alias=True),
+            "ctxBefore": result.ctx_before,
+            "ctxAfter": result.ctx_after,
         }
     )
 

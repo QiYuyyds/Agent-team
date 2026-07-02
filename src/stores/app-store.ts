@@ -39,6 +39,9 @@ interface AppState {
   messageIdsByConv: Record<string, string[]>
   runsByConv: Record<string, Record<string, AgentRunRow>>
 
+  // 压缩后「当前 ctx」的乐观覆盖值：at 比最新有 usage 的 run/message 更新时生效
+  ctxOverrideByConv: Record<string, { tokens: number; at: number }>
+
   // Orchestrator 的调度状态，按 Orchestrator runId 索引
   dispatchesByRunId: Record<string, DispatchState>
 
@@ -133,6 +136,9 @@ interface AppState {
   removeMessages(conversationId: string, messageIds: string[]): void
   clearConversationHistory(conversationId: string, conversation: ConversationWithMeta): void
 
+  /** 压缩后乐观刷新「当前 ctx」：写入按会话隔离的覆盖值，下一次真实 run 用实测值接管。 */
+  setCtxOverride(conversationId: string, tokens: number, at: number): void
+
   addPendingAttachment(conversationId: string, attachment: AttachmentRow): void
   removePendingAttachment(conversationId: string, attachmentId: string): void
   clearPendingAttachments(conversationId: string): void
@@ -176,6 +182,7 @@ export const useAppStore = create<AppState>()(
     artifacts: {},
     messageIdsByConv: {},
     runsByConv: {},
+    ctxOverrideByConv: {},
     dispatchesByRunId: {},
     activeConversationId: null,
     previewArtifactId: null,
@@ -216,6 +223,7 @@ export const useAppStore = create<AppState>()(
         for (const mid of msgIds) delete s.messages[mid]
         delete s.messageIdsByConv[id]
         delete s.runsByConv[id]
+        delete s.ctxOverrideByConv[id]
         delete s.pendingWritesByConv[id]
         delete s.pendingBashCommandsByConv[id]
         delete s.pendingQuestionsByConv[id]
@@ -377,6 +385,7 @@ export const useAppStore = create<AppState>()(
         }
 
         delete s.runsByConv[conversationId]
+        delete s.ctxOverrideByConv[conversationId]
         delete s.replyTargetByConv[conversationId]
         delete s.pendingWritesByConv[conversationId]
         delete s.pendingBashCommandsByConv[conversationId]
@@ -386,6 +395,11 @@ export const useAppStore = create<AppState>()(
           s.highlightedMessageId = null
         }
         s.conversations[conversationId] = conversation
+      }),
+
+    setCtxOverride: (conversationId, tokens, at) =>
+      set((s) => {
+        s.ctxOverrideByConv[conversationId] = { tokens, at }
       }),
 
     setReplyTarget: (conversationId, messageId) =>
@@ -1204,6 +1218,9 @@ export const useConversationUsageTotal = (conversationId: string | null): Conver
   )
   const messages = useAppStore((s) => s.messages)
   const agents = useAppStore((s) => s.agents)
+  const ctxOverride = useAppStore((s) =>
+    conversationId ? s.ctxOverrideByConv[conversationId] : undefined,
+  )
   return useMemo(() => {
     const result: ConversationUsageTotal = {
       inputTokens: 0,
@@ -1217,7 +1234,9 @@ export const useConversationUsageTotal = (conversationId: string | null): Conver
       runCount: 0,
     }
     // 优先用 runs（实时性 + model 字段最准）；空则从 messages 兜底（刷新页面后唯一可用的源）
+    // lastInputTs：产生 lastInputTokens 的那条 run/message 的时间戳，用于和压缩覆盖值比较。
     let hasRunUsage = false
+    let lastInputTs = -1
     if (runs) {
       let latestRunWithUsage = -1
       for (const run of Object.values(runs)) {
@@ -1234,6 +1253,7 @@ export const useConversationUsageTotal = (conversationId: string | null): Conver
         if (u.model) result.byModel[u.model] = (result.byModel[u.model] ?? 0) + sub
         if (run.startedAt > latestRunWithUsage) {
           latestRunWithUsage = run.startedAt
+          lastInputTs = run.startedAt
           result.lastInputTokens = u.lastInputTokens ?? u.inputTokens
         }
       }
@@ -1263,6 +1283,7 @@ export const useConversationUsageTotal = (conversationId: string | null): Conver
         }
         if (m.createdAt > latestMsgCreatedAt) {
           latestMsgCreatedAt = m.createdAt
+          lastInputTs = m.createdAt
           result.lastInputTokens = u.inputTokens
         }
       }
@@ -1270,6 +1291,11 @@ export const useConversationUsageTotal = (conversationId: string | null): Conver
 
     result.totalTokens =
       result.inputTokens + result.outputTokens + result.cacheCreationTokens + result.cacheReadTokens
+
+    // 压缩后的乐观覆盖：仅当覆盖值比最新实测的 run/message 更新时接管「当前 ctx」。
+    if (ctxOverride && ctxOverride.at > lastInputTs) {
+      result.lastInputTokens = ctxOverride.tokens
+    }
     return result
-  }, [runs, messageIds, messages, agents])
+  }, [runs, messageIds, messages, agents, ctxOverride])
 }
